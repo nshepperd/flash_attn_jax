@@ -1,0 +1,13 @@
+# This is for my convenience and not the recommended way of building. Just use setup.py.
+
+export PATH
+export CUDA_PATH
+export NVCC_PREPEND_FLAGS
+
+TOP=$(TUP_CWD)
+
+: foreach csrc/flash_attn/src/*.cu |> /opt/cuda/bin/nvcc -I$(TOP)/csrc/flash_attn -I$(TOP)/csrc/flash_attn/src -I$(TOP)/csrc/cutlass/include -I/opt/cuda/include -I/usr/include/python3.11 -c %f -o %o -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options '-fPIC' -O3 -std=c++17 -U__CUDA_NO_HALF_OPERATORS__ -U__CUDA_NO_HALF_CONVERSIONS__ -U__CUDA_NO_HALF2_OPERATORS__ -U__CUDA_NO_BFLOAT16_CONVERSIONS__ --expt-relaxed-constexpr --expt-extended-lambda --use_fast_math -gencode arch=compute_80,code=sm_80 --threads 4 |> build/temp.linux-x86_64-cpython-311/csrc/flash_attn/src/%B.o
+
+: csrc/flash_attn/flash_api.cpp |> gcc -DNDEBUG -g -fwrapv -O3 -Wall -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=/build/python/src=/usr/src/debug/python -flto=auto -ffat-lto-objects -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=/build/python/src=/usr/src/debug/python -flto=auto -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=/build/python/src=/usr/src/debug/python -flto=auto -fPIC -I$(TOP)/csrc/flash_attn -I$(TOP)/csrc/flash_attn/src -I$(TOP)/csrc/cutlass/include -I/opt/cuda/include \$(python -m pybind11 --include) -c %f -o %o -O3 -std=c++17 |> build/temp.linux-x86_64-cpython-311/csrc/flash_attn/flash_api.o
+
+: build/temp.linux-x86_64-cpython-311/csrc/flash_attn/src/*.o build/temp.linux-x86_64-cpython-311/csrc/flash_attn/*.o |> g++ -shared -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now -flto=auto -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now -flto=auto %f -L/opt/cuda/lib64 -L/usr/lib -lcudart -o %o |> build/lib.linux-x86_64-cpython-311/flash_attn_2_cuda_jax.cpython-311-x86_64-linux-gnu.so
