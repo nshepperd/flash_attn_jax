@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <ATen/cuda/CUDAContext.h>
-
 #include "static_switch.h"
 #include "flash.h"
 #include "flash_bwd_preprocess_kernel.h"
 #include "flash_bwd_kernel.h"
+#include "exception.h"
 
 template<bool Clear_dQaccum=true, typename Kernel_traits>
 __global__ void flash_bwd_dot_do_o_kernel(const Flash_bwd_params params) {
@@ -49,8 +48,10 @@ void run_flash_bwd_seqk_parallel(Flash_bwd_params &params, cudaStream_t stream) 
     const int num_n_block = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     int gridDimx = num_n_block;
     if (params.deterministic) {
-        auto dprops = at::cuda::getCurrentDeviceProperties();
-        gridDimx = (dprops->multiProcessorCount + params.b * params.h - 1) / (params.b * params.h);
+		int device, sm_count;
+		C10_CUDA_CHECK(cudaGetDevice(&device));
+		C10_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+        gridDimx = (sm_count + params.b * params.h - 1) / (params.b * params.h);
     }
     dim3 grid_n(gridDimx, params.b, params.h);
 

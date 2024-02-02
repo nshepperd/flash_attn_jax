@@ -19,9 +19,11 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+*.whl
 
 # IDE-related
 .idea/
 
 # Dev
 venv
+.tup

@@ -7,13 +7,13 @@
 #include <cuda.h>
 #include <vector>
 
-#ifdef OLD_GENERATOR_PATH
-#include <ATen/CUDAGeneratorImpl.h>
-#else
-#include <ATen/cuda/CUDAGeneratorImpl.h>
-#endif
+// #ifdef OLD_GENERATOR_PATH
+// #include <ATen/CUDAGeneratorImpl.h>
+// #else
+// #include <ATen/cuda/CUDAGeneratorImpl.h>
+// #endif
 
-#include <ATen/cuda/CUDAGraphsUtils.cuh> // For at::cuda::philox::unpack
+// #include <ATen/cuda/CUDAGraphsUtils.cuh> // For at::cuda::philox::unpack
 
 constexpr int TOTAL_DIM = 0;
 constexpr int H_DIM = 1;
@@ -45,6 +45,14 @@ struct Qkv_params {
     // different from nheads (query).
     int h_h_k_ratio; // precompute h / h_k,
 };
+
+struct PhiloxCudaState {
+	// https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-vector-statistics-notes/2021-1/philox4x32-10.html
+	// This is different to the Philox described in numpy docs...
+	uint64_t counter[2];
+	uint64_t key;
+};
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -120,7 +128,7 @@ struct Flash_fwd_params : public Qkv_params {
     int window_size_left, window_size_right;
 
     // Random state.
-    at::PhiloxCudaState philox_args;
+    PhiloxCudaState philox_args;
 
     // Pointer to the RNG seed (idx 0) and offset (idx 1).
     uint64_t * rng_state;
