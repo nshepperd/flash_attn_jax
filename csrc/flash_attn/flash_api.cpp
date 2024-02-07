@@ -342,7 +342,7 @@ pybind11::dict Registrations() {
 }
 
 
-PYBIND11_MODULE(flash_attn_2_cuda_jax, m) {
+PYBIND11_MODULE(flash_api, m) {
     m.doc() = "FlashAttention";
 	m.def("get_registrations", &Registrations);
 	m.def("make_flash_mha_fwd_args", &make_mha_fwd_args);
