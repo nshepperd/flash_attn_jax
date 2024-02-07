@@ -18,6 +18,16 @@ To install: TODO
 
 Interface: `src/flash_attn_jax/flash.py`
 
+```py
+from flash_attn_jax import flash_mha
+
+flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1))
+```
+
+Accepts q,k,v with shape `[n, l, h, d]`, and returns `[n, l, h, d]`. `softmax_scale` is the
+multiplier for the softmax, defaulting to `1/sqrt(d)`. Set window_size
+to positive values for sliding window attention.
+
 FlashAttention-2 currently supports:
 1. Ampere, Ada, or Hopper GPUs (e.g., A100, RTX 3090, RTX 4090, H100). Support for Turing
    GPUs (T4, RTX 2080) is coming soon, please use FlashAttention 1.x for Turing

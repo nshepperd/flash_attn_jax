@@ -114,17 +114,17 @@ void mha_fwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opa
     // CHECK_SHAPE(v, batch_size, seqlen_k, num_heads_k, head_size_og);
 
     // at::Tensor q_padded, k_padded, v_padded;
-	void *q_padded, *k_padded, *v_padded;
-    if (head_size_og % 8 != 0) {
-		CHECK(false, "can't pad");
-        // q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-        // k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-        // v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-    } else {
-        q_padded = q;
-        k_padded = k;
-        v_padded = v;
-    }
+	void *q_padded=q, *k_padded=k, *v_padded=v;
+    // if (head_size_og % 8 != 0) {
+	// 	// CHECK(false, "can't pad");
+    //     // q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+    //     // k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+    //     // v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+    // } else {
+    //     q_padded = q;
+    //     k_padded = k;
+    //     v_padded = v;
+    // }
 
     // at::Tensor out;
     // if (out_.has_value()) {

@@ -26,11 +26,39 @@ _flash_mha_bwd_p.multiple_results = True
 _flash_mha_bwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_bwd_p))
 
 
-def flash_mha_fwd(q, k, v, softmax_scale=None):
-    return _flash_mha_fwd_p.bind(q, k, v, softmax_scale=softmax_scale)
+def flash_mha_fwd(q, k, v, softmax_scale, is_causal, window_size):
+    d = q.shape[-1]
+    assert len(q.shape) == 4
+    assert d == k.shape[-1]
+    assert d == v.shape[-1]
+    if d % 8 != 0:
+        # We need padding.
+        padding = [(0,0),(0,0),(0,0),(0, 8 - d%8)]
+        q = jnp.pad(q, padding)
+        k = jnp.pad(k, padding)
+        v = jnp.pad(v, padding)
+    out, lse = _flash_mha_fwd_p.bind(q, k, v, softmax_scale=softmax_scale, d_og=d, is_causal=is_causal, window_size=window_size)
+    if d % 8 != 0:
+        out = out[..., :d]
+    return out, lse
 
-def flash_mha_bwd(dout, q, k, v, out, lse, softmax_scale=None):
-    return _flash_mha_bwd_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale)
+def flash_mha_bwd(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size):
+    d = q.shape[-1]
+    assert len(q.shape) == 4
+    assert d == k.shape[-1]
+    assert d == v.shape[-1]
+    if d % 8 != 0:
+        # We need padding.
+        padding = [(0,0),(0,0),(0,0),(0, 8 - d%8)]
+        q = jnp.pad(q, padding)
+        k = jnp.pad(k, padding)
+        v = jnp.pad(v, padding)
+        out = jnp.pad(out, padding)
+        dout = jnp.pad(dout, padding)
+    dq, dk, dv = _flash_mha_bwd_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, d_og=d, is_causal=is_causal, window_size=window_size)
+    if d % 8 != 0:
+        return dq[...,:d], dk[...,:d], dv[...,:d]
+    return dq, dk, dv
 
 # ==== CUDA lowerings ====
 
@@ -43,7 +71,7 @@ def default_layouts(*shapes):
         return range(len(shape)-1, -1, -1)
     return [row_major(shape) for shape in shapes]
 
-def _flash_mha_fwd_cuda_lowering(ctx, q, k, v, softmax_scale=None):
+def _flash_mha_fwd_cuda_lowering(ctx, q, k, v, softmax_scale=None, d_og=None, is_causal=False, window_size=None):
     # print(type(q), dir(q), q.type)
     q_type = ir.RankedTensorType(q.type)
     q_shape = q_type.shape
@@ -68,11 +96,11 @@ def _flash_mha_fwd_cuda_lowering(ctx, q, k, v, softmax_scale=None):
     opaque = flash_api.make_flash_mha_fwd_args(
         0.0, # p_dropout
         softmax_scale,
-        False, # is_causal
-        -1, # window_size_left
-        -1, # window_size_right
+        is_causal, # is_causal
+        window_size[0], # window_size_left
+        window_size[1], # window_size_right
         False, # return_softmax
-        n, l, h, d,
+        n, l, h, d_og or d,
         lk, hk,
         flash_api.BF16 if type(out_element_type) == ir.BF16Type else flash_api.FP16,
         0)
@@ -92,7 +120,7 @@ mlir.register_lowering(
     platform="gpu",
 )
 
-def _flash_mha_bwd_cuda_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None):
+def _flash_mha_bwd_cuda_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None, d_og=None, is_causal=None, window_size=None):
     dout_type = ir.RankedTensorType(dout.type).element_type
     q_type = ir.RankedTensorType(q.type).element_type
     k_type = ir.RankedTensorType(k.type).element_type
@@ -129,11 +157,11 @@ def _flash_mha_bwd_cuda_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=Non
     opaque = flash_api.make_flash_mha_bwd_args(
         0.0, # p_dropout
         softmax_scale,
-        False, # is_causal
-        -1, # window_size_left
-        -1, # window_size_right
+        is_causal, # is_causal
+        window_size[0], # window_size_left
+        window_size[1], # window_size_right
         False, # deterministic
-        n, lq, hq, d,
+        n, lq, hq, d_og or d,
         lk, hk,
         flash_api.BF16 if type(q_type) == ir.BF16Type else flash_api.FP16,
         0)
@@ -155,7 +183,7 @@ mlir.register_lowering(
 
 # ==== Abstract evaluation rules ====
 
-def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None):
+def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None, d_og=None, is_causal=None, window_size=None):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
     v_dtype = dtypes.canonicalize_dtype(v.dtype)
@@ -169,7 +197,7 @@ def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None):
 _flash_mha_fwd_p.def_abstract_eval(_flash_mha_fwd_abstract)
 
 
-def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None):
+def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, d_og=None, is_causal=None, window_size=None):
     dout_dtype = dtypes.canonicalize_dtype(dout.dtype)
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
@@ -227,19 +255,19 @@ def custom_vjp(cls, nondiff_argnums=()):
 # gets placed at the front of the argument list in bwd.
 @partial(custom_vjp, nondiff_argnums=(3,))
 class _flash_mha_vjp:
-    def base(q,k,v,softmax_scale):
-        return flash_mha_fwd(q,k,v, softmax_scale=softmax_scale)[0]
-    def fwd(q,k,v,softmax_scale):
-        out, lse = flash_mha_fwd(q,k,v, softmax_scale=softmax_scale)
+    def base(q,k,v,config):
+        return flash_mha_fwd(q,k,v, **config)[0]
+    def fwd(q,k,v,config):
+        out, lse = flash_mha_fwd(q,k,v, **config)
         return out, (q,k,v,out,lse)
-    def bwd(softmax_scale, pack, dout):
+    def bwd(config, pack, dout):
         (q,k,v,out,lse) = pack
-        dq, dk, dv = flash_mha_bwd(dout, q, k, v, out, lse, softmax_scale=softmax_scale)
+        dq, dk, dv = flash_mha_bwd(dout, q, k, v, out, lse, **config)
         return (dq,dk,dv)
 
 # ==== Frontend ====
 
-def flash_mha(q,k,v,softmax_scale=None):
+def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
     """Flash attention.
 
     softmax_scale defaults to 1/sqrt(d) and must be a python float if
@@ -249,5 +277,5 @@ def flash_mha(q,k,v,softmax_scale=None):
     if softmax_scale is None:
         softmax_scale = 1/math.sqrt(q.shape[-1])
     assert type(softmax_scale) is float
-    o = _flash_mha_vjp(q,k,v,softmax_scale=softmax_scale)
+    o = _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
     return o
