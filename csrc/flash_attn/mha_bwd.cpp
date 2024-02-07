@@ -180,7 +180,7 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
     const int seqlen_q = args.l;
     const int num_heads = args.h;
     const int head_size_og = args.d; //dout.size(3);
-    const int head_size = args.d; //sizes[3];
+    const int head_size = args.d + (8 - head_size_og%8) % 8; //sizes[3];
     const int seqlen_k = args.l_k;
     const int num_heads_k = args.h_k; //k.size(2);
     CHECK(batch_size > 0, "batch size must be positive");
@@ -237,12 +237,13 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
     // }
 
     // at::Tensor dout_padded;
-    if (head_size_og % 8 != 0) {
-		CHECK(false, "can't pad");
-        // dout_padded = torch::nn::functional::pad(dout, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-    } else {
-        // dout_padded = dout;
-    }
+
+    // if (head_size_og % 8 != 0) {
+	// 	CHECK(false, "can't pad");
+    //     // dout_padded = torch::nn::functional::pad(dout, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
+    // } else {
+    //     // dout_padded = dout;
+    // }
 
     // bool loop = seqlen_k > blocksize_c;
     // TODO: change later, for now set to true for simplicity
@@ -365,12 +366,12 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
         // at::sum_out(dk, at::reshape(dk_expanded, {batch_size, seqlen_k, num_heads_k, num_heads / num_heads_k, head_size}), {3});
         // at::sum_out(dv, at::reshape(dv_expanded, {batch_size, seqlen_k, num_heads_k, num_heads / num_heads_k, head_size}), {3});
     }
-    if (head_size_og % 8 != 0) {
-		CHECK(false, "can't slice");
-        // dq = dq.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-        // dk = dk.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-        // dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-    }
+    // if (head_size_og % 8 != 0) {
+	// 	CHECK(false, "can't slice");
+    //     // dq = dq.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
+    //     // dk = dk.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
+    //     // dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
+    // }
 
     // return { dq, dk, dv, softmax_d };
 }
