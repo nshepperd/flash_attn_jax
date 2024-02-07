@@ -104,8 +104,8 @@ jobs:
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
           # https://github.com/pytorch/pytorch/blob/664058fa83f1d8eede5d66418abff6e20bd76ca8/torch/utils/cpp_extension.py#L810
           # However this still fails so I'm using a newer version of setuptools
-          pip install setuptools==68.0.0
-          pip install ninja packaging wheel
+          pip install setuptools==68.0.0 setuptools-cuda-cpp
+          pip install ninja packaging wheel pybind11
           export PATH=/usr/local/nvidia/bin:/usr/local/nvidia/lib64:$PATH
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
           # Limit MAX_JOBS otherwise the github runner goes OOM
