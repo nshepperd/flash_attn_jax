@@ -34,7 +34,7 @@ jobs:
 
   build_wheels:
     name: Build Wheel
-    # needs: setup_release
+    needs: setup_release
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -43,10 +43,21 @@ jobs:
           # Using ubuntu-20.04 instead of 22.04 for more compatibility (glibc). Ideally we'd use the
           # manylinux docker image, but I haven't figured out how to install CUDA on manylinux.
           os: [ubuntu-20.04]
-          python-version: ['3.11'] #['3.7', '3.8', '3.9', '3.10', '3.11']
-          # torch-version: ['1.12.1', '1.13.1', '2.0.1', '2.1.1', '2.2.0.dev20231130']
-          cuda-version: ['12.3.1'] #['11.8.0', '12.2.2']
-          jax-version: ['0.4.20']
+          python-version: ['3.9', '3.10', '3.11', '3.12']
+          include:
+            # 0.4.24 support 11.8 and 12.3
+            - jax-version: '0.4.24'
+              cuda-version: '11.8.0'
+            - jax-version: '0.4.24'
+              cuda-version: '12.3.1'
+            # 0.4.20 support 11.8, 12.2, 12.3
+            - jax-version: '0.4.20'
+              cuda-version: '11.8.0'
+            - jax-version: '0.4.20'
+              cuda-version: '12.2.2'
+            - jax-version: '0.4.20'
+              cuda-version: '12.3.1'
+
 
     steps:
       - name: Checkout
@@ -77,7 +88,6 @@ jobs:
         with:
           swap-size-gb: 10
 
-
       - name: Install CUDA ${{ matrix.cuda-version }}
         if: ${{ matrix.cuda-version != 'cpu' }}
         uses: Jimver/cuda-toolkit@v0.2.14
@@ -104,16 +114,23 @@ jobs:
           # We want setuptools >= 49.6.0 otherwise we can't compile the extension if system CUDA version is 11.7 and pytorch cuda version is 11.6
           # https://github.com/pytorch/pytorch/blob/664058fa83f1d8eede5d66418abff6e20bd76ca8/torch/utils/cpp_extension.py#L810
           # However this still fails so I'm using a newer version of setuptools
-          pip install setuptools==68.0.0 setuptools-cuda-cpp
+          pip install setuptools==68.0.0
+          # setuptools-cuda-cpp on pypi has a bug that breaks ninja
+          pip install git+https://github.com/nshepperd/setuptools-cuda-cpp
           pip install ninja packaging wheel pybind11
           export PATH=/usr/local/nvidia/bin:/usr/local/nvidia/lib64:$PATH
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-          # Limit MAX_JOBS otherwise the github runner goes OOM
-          MAX_JOBS=2 python setup.py bdist_wheel --dist-dir=dist
-          tmpname=cu${MATRIX_CUDA_VERSION}jax${MATRIX_JAX_VERSION}
+          # Set MAX_JOBS to allocate 8GB per job, which should be enough to build comfortably
+          RAM=$(free -m | grep Mem | awk '{print $4}')
+          export MAX_JOBS="$(( RAM/8000 < 1 ? 1 : RAM/8000 ))"
+          echo "Building with ${MAX_JOBS} jobs to fit within ${RAM}MB"
+          python setup.py bdist_wheel --dist-dir=dist
+          tmpname=cu${MATRIX_CUDA_VERSION}jax${{ matrix.jax-version }}
           wheel_name=$(ls dist/*whl | xargs -n 1 basename | sed "s/-/+$tmpname-/2")
           ls dist/*whl |xargs -I {} mv {} dist/${wheel_name}
           echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
+        shell:
+          bash
 
       - name: Log Built Wheels
         run: |
