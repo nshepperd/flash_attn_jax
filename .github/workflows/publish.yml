@@ -113,7 +113,7 @@ jobs:
           export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
           # Set MAX_JOBS to allocate 8GB per job, which should be enough to build comfortably
           free -h
-          export MAX_JOBS=2
+          export MAX_JOBS=3
           echo "Building with ${MAX_JOBS} jobs"
           python setup.py bdist_wheel --dist-dir=dist
           tmpname=cu${MATRIX_CUDA_VERSION}jax${{ matrix.jax-version }}
