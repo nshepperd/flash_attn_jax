@@ -360,6 +360,20 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
         // softmax_d.zero_();
     }
 
+	C10_CUDA_CHECK(cudaFree(params.rng_state));
+	if(softmax_d != nullptr) {
+		C10_CUDA_CHECK(cudaFree(softmax_d));
+	}
+	if(dq_accum != nullptr) {
+		C10_CUDA_CHECK(cudaFree(dq_accum));
+	}
+	if(dk_accum != nullptr) {
+		C10_CUDA_CHECK(cudaFree(dk_accum));
+	}
+	if(dv_accum != nullptr) {
+		C10_CUDA_CHECK(cudaFree(dv_accum));
+	}
+
     // For MQA/GQA we need to sum dK and dV across the groups
     if (num_heads_k != num_heads) {
 		CHECK(false, "don't handle MQA yet");

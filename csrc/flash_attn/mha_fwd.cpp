@@ -232,9 +232,10 @@ void mha_fwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opa
         // softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
 
+	C10_CUDA_CHECK(cudaFree(params.rng_state));
 	if(params.softmax_lseaccum_ptr != nullptr) {
-		cudaFree(params.softmax_lseaccum_ptr);
-		cudaFree(params.oaccum_ptr);
+		C10_CUDA_CHECK(cudaFree(params.softmax_lseaccum_ptr));
+		C10_CUDA_CHECK(cudaFree(params.oaccum_ptr));
 	}
 
 
