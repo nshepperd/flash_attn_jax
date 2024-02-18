@@ -1,5 +1,6 @@
-import sys
-sys.path.append('build/lib.linux-x86_64-cpython-311')
+import sys, glob
+if glob.glob('build/lib.linux-*'):
+    sys.path.append(glob.glob('build/lib.linux-*')[0])
 
 import pytest
 import jax
@@ -49,7 +50,7 @@ def check(ref_out, jax_out, out):
 @pytest.mark.parametrize("h", [1, 4, 8])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
-def test_flash_attn(n, seqlen, h, d, causal, local, dtype):
+def test_flash_fwd(n, seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
@@ -91,4 +92,4 @@ def test_flash_bwd(n, seqlen, h, d, causal, local, dtype):
     check(ref_out, jax_out, out)
 
 if __name__ == '__main__':
-    test_flash_bwd(1,97,1,59,False,jnp.float16)
+    test_flash_fwd(1,97,1,59,False,False,jnp.float16)
