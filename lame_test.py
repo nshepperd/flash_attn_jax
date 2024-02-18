@@ -1,5 +1,6 @@
-import sys
-sys.path.append('build/lib.linux-x86_64-cpython-311')
+import sys, glob
+if glob.glob('build/lib.linux-*'):
+    sys.path.append(glob.glob('build/lib.linux-*')[0])
 
 from functools import partial
 from functools import reduce
