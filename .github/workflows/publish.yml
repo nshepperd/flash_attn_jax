@@ -96,7 +96,7 @@ jobs:
       - name: Install Jax ${{ matrix.torch-version }}+cu${{ matrix.cuda-version }}
         run: |
           pip install --upgrade pip
-          pip install --upgrade 'jax[cuda12_local] == ${{ matrix.jax-version }}' -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+          pip install --upgrade "jax[cuda${MATRIX_CUDA_VERSION%.*}_local] == ${{ matrix.jax-version }}" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
         shell:
           bash
 
