@@ -203,10 +203,8 @@ setup(
     ],
     ext_modules=ext_modules,
     cmdclass={'build_ext': BuildExtension.with_options(use_ninja=True)},
-    python_requires=">=3.7",
+    python_requires=">=3.9",
     install_requires=[
         "einops",
-        "packaging",
-        "ninja",
     ],
 )
