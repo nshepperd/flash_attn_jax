@@ -19,7 +19,6 @@ from jaxlib.hlo_helpers import custom_call
 # from flash_attn_jax.flash import flash_mha_fwd, flash_mha_bwd
 from flash_attn_jax import flash_mha
 
-
 if __name__ == '__main__':
     import time
     import numpy as np
@@ -51,66 +50,34 @@ if __name__ == '__main__':
     def fwd(q,k,v):
         return flash_mha(q,k,v)
 
+    # print(fwd.lower(q,k,v).as_text())
+
     from jax.sharding import PositionalSharding
     from einops import rearrange
 
-    sharding = PositionalSharding(jax.devices())
+    # sharding = PositionalSharding(jax.devices())
+    devices = jax.devices()
+    # devices = [*jax.devices(), *jax.devices(backend='cpu')]
+    n_device = len(devices)
+    sharding = PositionalSharding(devices).reshape(1,-1,1,1)#.replicate()
 
-    q = jax.device_put(q, sharding.reshape(2,1,1,1))
-    k = jax.device_put(k, sharding.reshape(2,1,1,1))
-    v = jax.device_put(v, sharding.reshape(2,1,1,1))
+
+    # from jax.experimental import mesh_utils
+    # from jax.sharding import PartitionSpec as P, Mesh
+    # from jax.sharding import NamedSharding
+    # devices = np.array(jax.devices()) #mesh_utils.create_device_mesh((1,))
+    # mesh = Mesh(devices, axis_names=('x',))
+    # sharding = NamedSharding(mesh, P(None,None,'x',None))
+
+    # print(mesh)
+
+    o_ref = fwd(q,k,v)
+
+    q = jax.device_put(q, sharding)
+    k = jax.device_put(k, sharding)
+    v = jax.device_put(v, sharding)
     jax.debug.visualize_array_sharding(rearrange(q, 'n l h d -> n (l h d)'))
     print(fwd.lower(q,k,v).compile().as_text())
-    exit()
-
-    # print('==== forward ====')
-    # q = jax.random.normal(jax.random.PRNGKey(0), [32, 4096, 4, 32]).astype(jnp.float16)
-    # k = jax.random.normal(jax.random.PRNGKey(1), [32, 4096, 4, 32]).astype(jnp.float16)
-    # v = jax.random.normal(jax.random.PRNGKey(2), [32, 4096, 4, 32]).astype(jnp.float16)
-
-    # @jax.jit
-    # def fwd(q,k,v):
-    #     o = flash_mha(q,k,v)
-    #     for _ in range(32):
-    #         o = flash_mha(q,k,o)
-    #     return o
-
-    # @jax.jit
-    # def fwd_jax(q,k,v):
-    #     ro = pure_mha(q,k,v)
-    #     for _ in range(32):
-    #         ro = pure_mha(q,k,ro)
-    #     return ro
-
-    # o = fwd(q,k,v) #, softmax_scale=float(np.sqrt(1/32)))[0]
-    # start = time.time()
-    # o = fwd(q,k,v) #, softmax_scale=float(np.sqrt(1/32)))[0]
-    # print('flash:', time.time() - start, 'seconds')
-    # ro = fwd_jax(q,k,v)
-    # start = time.time()
-    # ro = fwd_jax(q,k,v)
-    # print('jax:', time.time() - start, 'seconds')
-    # print(pretty(jnp.abs(o - ro)), jnp.mean(jnp.abs(ro)))
-
-    # @jax.jit
-    # @jax.grad
-    # def grad_pure(inputs):
-    #     q,k,v = inputs
-    #     return pure_mha(q,k,v).sum()
-
-    # @jax.jit
-    # @jax.grad
-    # def grad_flash(inputs):
-    #     q,k,v = inputs
-    #     return flash_mha(q,k,v).sum()
-
-    # print('==== backward ====')
-    # q = jax.random.normal(jax.random.PRNGKey(0), [1, 4, 2, 32]).astype(jnp.float16)
-    # k = jax.random.normal(jax.random.PRNGKey(1), [1, 4, 2, 32]).astype(jnp.float16)
-    # v = jax.random.normal(jax.random.PRNGKey(2), [1, 4, 2, 32]).astype(jnp.float16)
-    # dq, dk, dv = grad_flash((q,k,v))
-    # rdq, rdk, rdv = grad_pure((q,k,v))
-    # # print(rdq, jnp.mean(jnp.abs(rdq)))
-    # print('q', pretty(jnp.abs(dq - rdq)), jnp.mean(jnp.abs(rdq)))
-    # print('k', pretty(jnp.abs(dk - rdk)), jnp.mean(jnp.abs(rdk)))
-    # print('v', pretty(jnp.abs(dv - rdv)), jnp.mean(jnp.abs(rdv)))
+    o = fwd(q,k,v)
+    jax.debug.visualize_array_sharding(rearrange(o, 'n l h d -> n (l h d)'))
+    print((o - o_ref).std())
