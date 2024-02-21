@@ -61,6 +61,7 @@ jobs:
 
       - name: Set CUDA and PyTorch versions
         run: |
+          echo "MATRIX_CUDA_MAJOR=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
           echo "MATRIX_CUDA_VERSION=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
           echo "MATRIX_JAX_VERSION=$(echo ${{ matrix.jax-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
 
@@ -96,7 +97,7 @@ jobs:
       - name: Install Jax ${{ matrix.torch-version }}+cu${{ matrix.cuda-version }}
         run: |
           pip install --upgrade pip
-          pip install --upgrade "jax[cuda${MATRIX_CUDA_VERSION%.*}_local] == ${{ matrix.jax-version }}" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+          pip install --upgrade "jax[cuda${MATRIX_CUDA_MAJOR}_local] == ${{ matrix.jax-version }}" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
         shell:
           bash
 
