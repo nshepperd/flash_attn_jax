@@ -103,8 +103,7 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4])
 @pytest.mark.parametrize("seqlen", [128])
-@pytest.mark.parametrize("shard_dim", [0,2])
-def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype, shard_dim):
+def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
@@ -117,18 +116,34 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype, shard_dim):
     def flash(qkv):
         return (flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)**2).sum()
 
-    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=dtype)
-    k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
-    v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
+    def with_sharding(sharding):
+        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=dtype)
+        k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
+        v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
+        (q,k,v) = jax.device_put((q,k,v), sharding)
+        hlo = flash.lower((q,k,v)).compile().as_text()
+        return hlo
 
-    shape = [1,1,1,1]
-    shape[shard_dim] = n
-    sharding = PositionalSharding(devices).reshape(shape)
-
-    q,k,v = jax.device_put((q,k,v), sharding)
-    hlo = flash.lower((q,k,v)).compile().as_text()
+    hlo = with_sharding(PositionalSharding(devices).reshape(n,1,1,1))
     assert 'all-gather' not in hlo
     assert 'dynamic-slice' not in hlo
+
+    hlo = with_sharding(PositionalSharding(devices).reshape(1,1,n,1))
+    assert 'all-gather' not in hlo
+    assert 'dynamic-slice' not in hlo
+
+    if not local:
+        with Mesh(np.array(devices), axis_names=('x',)) as mesh:
+            sharding = NamedSharding(mesh, P(None,'x',None,None))
+            hlo = with_sharding(sharding)
+            # No resharding should occur, only manual collective-permute.
+            assert 'all-gather' not in hlo
+            assert 'dynamic-slice' not in hlo
+            assert 'collective-permute' in hlo
+            # Should always run concurrently, meaning custom-call is always between start and done.
+            import re
+            collectives = ''.join(re.findall(" collective-permute-start| collective-permute-done| custom-call", hlo))
+            assert 'collective-permute-start collective-permute-done' not in collectives, hlo
 
 @pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
@@ -181,8 +196,7 @@ def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4, 8])
 @pytest.mark.parametrize("seqlen", [128])
-@pytest.mark.parametrize("shard_dim", [0,2])
-def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
+def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
@@ -200,23 +214,25 @@ def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
 
-    if q.shape[shard_dim] % n != 0:
-        pytest.skip(f"{q.shape[shard_dim]} doesn't divide into {n} so we can't shard it.")
-
     ref_out = ref((q,k,v))
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    repl_out = flash((q,k,v))
+    ref16_out = flash((q,k,v))
 
-    shape = [1,1,1,1]
-    shape[shard_dim] = n
-    sharding = PositionalSharding(devices).reshape(shape)
+    def check_sharding(sharding,q,k,v):
+        (q,k,v) = jax.device_put((q,k,v), sharding)
+        out = flash((q,k,v))
+        check(ref_out,ref16_out,out)
 
-    (q,k,v) = jax.device_put((q,k,v), sharding)
-    hlo = flash.lower((q,k,v)).compile().as_text()
-    out = flash((q,k,v))
-    check(ref_out, repl_out, out)
+    check_sharding(PositionalSharding(devices).reshape(n,1,1,1),q,k,v)
+    check_sharding(PositionalSharding(devices).reshape(1,1,n,1),q,k,v)
+
+    if not local:
+        # Ring attention
+        with Mesh(np.array(devices), axis_names=('x',)) as mesh:
+            sharding = NamedSharding(mesh, P(None,'x',None,None))
+            check_sharding(sharding,q,k,v)
 
 if __name__ == '__main__':
     test_flash_fwd_sharded_hlo(128,4,32,False,False,jnp.float16)
