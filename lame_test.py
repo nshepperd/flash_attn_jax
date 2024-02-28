@@ -1,26 +1,33 @@
-import sys, glob
+import glob
+import os
+import sys
+
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
+
 if glob.glob('build/lib.linux-*'):
     sys.path.append(glob.glob('build/lib.linux-*')[0])
 
-from functools import partial
-from functools import reduce
+from functools import partial, reduce
 
-import jaxlib.mlir.ir
 import jax
 import jax.numpy as jnp
-import jax._src.test_util as jtu
+import jaxlib.mlir.ir
+from einops import rearrange
 from jax import core, dtypes
-from jax.interpreters import xla
-from jax.lib import xla_client
-from jax.interpreters import mlir
+from jax.experimental import mesh_utils
+from jax.interpreters import mlir, xla
 from jax.interpreters.mlir import ir
+from jax.lib import xla_client
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+from jax.sharding import PositionalSharding
 from jaxlib.hlo_helpers import custom_call
 
-# from flash_attn_jax.flash import flash_mha_fwd, flash_mha_bwd
 from flash_attn_jax import flash_mha
 
 if __name__ == '__main__':
     import time
+
     import numpy as np
 
     @jax.jit
@@ -50,34 +57,17 @@ if __name__ == '__main__':
     def fwd(q,k,v):
         return flash_mha(q,k,v)
 
-    # print(fwd.lower(q,k,v).as_text())
 
-    from jax.sharding import PositionalSharding
-    from einops import rearrange
+    # devices = jax.devices(backend='cpu')
+    # n_device = len(devices)
+    # sharding = PositionalSharding(devices).reshape(-1,1,1,1)#.replicate()
 
-    # sharding = PositionalSharding(jax.devices())
-    devices = jax.devices()
-    # devices = [*jax.devices(), *jax.devices(backend='cpu')]
-    n_device = len(devices)
-    sharding = PositionalSharding(devices).reshape(1,-1,1,1)#.replicate()
+    devices = jax.devices(backend='gpu')
+    with Mesh(devices, axis_names=('x',)) as mesh:
+        sharding = NamedSharding(mesh, P(None,None,'x',None))
+        q = jax.device_put(q, sharding)
+        k = jax.device_put(k, sharding)
+        v = jax.device_put(v, sharding)
+        # jax.debug.visualize_array_sharding(rearrange(q, 'n l h d -> n (l h d)'))
+        print(fwd.lower(q,k,v).compile().as_text())
 
-
-    # from jax.experimental import mesh_utils
-    # from jax.sharding import PartitionSpec as P, Mesh
-    # from jax.sharding import NamedSharding
-    # devices = np.array(jax.devices()) #mesh_utils.create_device_mesh((1,))
-    # mesh = Mesh(devices, axis_names=('x',))
-    # sharding = NamedSharding(mesh, P(None,None,'x',None))
-
-    # print(mesh)
-
-    o_ref = fwd(q,k,v)
-
-    q = jax.device_put(q, sharding)
-    k = jax.device_put(k, sharding)
-    v = jax.device_put(v, sharding)
-    jax.debug.visualize_array_sharding(rearrange(q, 'n l h d -> n (l h d)'))
-    print(fwd.lower(q,k,v).compile().as_text())
-    o = fwd(q,k,v)
-    jax.debug.visualize_array_sharding(rearrange(o, 'n l h d -> n (l h d)'))
-    print((o - o_ref).std())
