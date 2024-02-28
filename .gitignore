@@ -1,6 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+.pytest_cache
 
 # C extensions
 *.so
@@ -20,9 +21,11 @@ var/
 .installed.cfg
 *.egg
 *.whl
+.eggs
 
 # IDE-related
 .idea/
+.vscode/
 
 # Dev
 venv
