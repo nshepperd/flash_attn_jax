@@ -11,10 +11,11 @@ Please cite (see below) and credit FlashAttention if you use it.
 ## Installation and features
 
 Requirements:
-- CUDA 11.6 and above.
+- CUDA 11.8 and above.
 - Linux. Same story as with the pytorch repo. I haven't tested compilation of the jax bindings on windows.
+- JAX >=`0.4.24`. The custom sharding used for ring attention requires some somewhat advanced features.
 
-To install: TODO
+To install: For now, download the appropriate release from the releases page and install it with pip.
 
 Interface: `src/flash_attn_jax/flash.py`
 
@@ -27,6 +28,17 @@ flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1))
 Accepts q,k,v with shape `[n, l, h, d]`, and returns `[n, l, h, d]`. `softmax_scale` is the
 multiplier for the softmax, defaulting to `1/sqrt(d)`. Set window_size
 to positive values for sliding window attention.
+
+### Now Supports Ring Attention
+
+Use jax.Array and shard your tensors along the length dimension, and flash_mha will automatically use the ring attention algorithm:
+
+```py
+with Mesh(devices, axis_names=('len',)) as mesh:
+        sharding = NamedSharding(mesh, P(None,'len',None)) # n l d
+        tokens = jax.device_put(tokens, sharding)
+        # invoke your jax.jit'd transformer.forward
+```
 
 FlashAttention-2 currently supports:
 1. Ampere, Ada, or Hopper GPUs (e.g., A100, RTX 3090, RTX 4090, H100). Support for Turing
