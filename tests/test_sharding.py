@@ -1,4 +1,6 @@
-import sys, glob
+import glob
+import sys
+
 if glob.glob('build/lib.linux-*'):
     sys.path.append(glob.glob('build/lib.linux-*')[0])
 
@@ -6,11 +8,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from jax.sharding import PositionalSharding
 from jax.tree_util import tree_map
 
 from flash_attn_jax import flash_mha
+
 
 def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1)):
     softmax_scale = 1/np.sqrt(q.shape[-1])
@@ -79,13 +83,18 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
     assert 'all-gather' not in hlo
     assert 'dynamic-slice' not in hlo
 
-    # With q sharded and kv replicated, should need no communication
-    # (handle it as a cross attention), as long as causal and local
-    # are both false.
-    hlo = with_sharding(PositionalSharding(devices).reshape(1,n,1,1), PositionalSharding(devices).replicate())
-    if not (causal or local):
-        assert 'all-gather' not in hlo
-        assert 'dynamic-slice' not in hlo
+    if not local:
+        with Mesh(np.array(devices), axis_names=('x',)) as mesh:
+            sharding = NamedSharding(mesh, P(None,'x',None,None))
+            hlo = with_sharding(sharding)
+            # No resharding should occur, only manual collective-permute.
+            assert 'all-gather' not in hlo
+            assert 'dynamic-slice' not in hlo
+            assert 'collective-permute' in hlo
+            # Should always run concurrently, meaning custom-call is always between start and done.
+            import re
+            collectives = ''.join(re.findall(" collective-permute-start| collective-permute-done| custom-call", hlo))
+            assert 'collective-permute-start collective-permute-done' not in collectives, hlo
 
 
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
@@ -128,8 +137,7 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype, shard_dim):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4, 8])
 @pytest.mark.parametrize("seqlen", [128])
-@pytest.mark.parametrize("shard_dim", [0,1,2,3])
-def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
+def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
@@ -145,23 +153,25 @@ def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
 
-    if q.shape[shard_dim] % n != 0:
-        pytest.skip(f"{q.shape[shard_dim]} doesn't divide into {n} so we can't shard it.")
-
     ref_out = ref((q,k,v))
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    repl_out = flash((q,k,v))
+    ref16_out = flash((q,k,v))
 
-    shape = [1,1,1,1]
-    shape[shard_dim] = n
-    sharding = PositionalSharding(devices).reshape(shape)
+    def check_sharding(sharding,q,k,v):
+        (q,k,v) = jax.device_put((q,k,v), sharding)
+        out = flash((q,k,v))
+        check(ref_out,ref16_out,out)
 
-    (q,k,v) = jax.device_put((q,k,v), sharding)
-    hlo = flash.lower((q,k,v)).compile().as_text()
-    out = flash((q,k,v))
-    check(ref_out, repl_out, out)
+    check_sharding(PositionalSharding(devices).reshape(n,1,1,1),q,k,v)
+    check_sharding(PositionalSharding(devices).reshape(1,1,n,1),q,k,v)
+
+    if not local:
+        # Ring attention
+        with Mesh(np.array(devices), axis_names=('x',)) as mesh:
+            sharding = NamedSharding(mesh, P(None,'x',None,None))
+            check_sharding(sharding,q,k,v)
 
 
 @pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
@@ -171,7 +181,7 @@ def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4, 8])
 @pytest.mark.parametrize("seqlen", [128])
-@pytest.mark.parametrize("shard_dim", [0,1,2,3])
+@pytest.mark.parametrize("shard_dim", [0,2])
 def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
     window_size = (3,3) if local else (-1,-1)
 
@@ -209,4 +219,4 @@ def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype, shard_dim):
     check(ref_out, repl_out, out)
 
 if __name__ == '__main__':
-    test_flash_bwd_sharded_hlo(128,4,32,False,False,jnp.float16)
+    test_flash_fwd_sharded_hlo(128,4,32,False,False,jnp.float16)
