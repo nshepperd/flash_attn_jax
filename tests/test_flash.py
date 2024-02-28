@@ -91,5 +91,37 @@ def test_flash_bwd(n, seqlen, h, d, causal, local, dtype):
     out = flash((q,k,v))
     check(ref_out, jax_out, out)
 
+@pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
+@pytest.mark.parametrize("local", ['local',''])
+@pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("d", [59, 32])
+@pytest.mark.parametrize("h", [1, 4])
+@pytest.mark.parametrize("seqlen", [97, 128])
+@pytest.mark.parametrize("n", [1])
+def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
+    window_size = (3,3) if local else (-1,-1)
+
+    x = 4
+    q = jax.random.normal(jax.random.PRNGKey(0), [x, n, seqlen, h, d], dtype=jnp.float32)
+    k = jax.random.normal(jax.random.PRNGKey(1), [x, n, seqlen, h, d], dtype=jnp.float32)
+    v = jax.random.normal(jax.random.PRNGKey(2), [x, n, seqlen, h, d], dtype=jnp.float32)
+
+    @jax.jit
+    def ref(q,k,v):
+        return ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+    @jax.jit
+    def flash(q,k,v):
+        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+
+    ref_out = jnp.stack([ref(q[i],k[i],v[i]) for i in range(x)])
+    q = q.astype(dtype)
+    k = k.astype(dtype)
+    v = v.astype(dtype)
+    f16_out = jnp.stack([ref(q[i],k[i],v[i]) for i in range(x)])
+
+
+    out = jax.vmap(flash)(q,k,v)
+    check(ref_out, f16_out, out)
+
 if __name__ == '__main__':
     test_flash_fwd(1,97,1,59,False,False,jnp.float16)
