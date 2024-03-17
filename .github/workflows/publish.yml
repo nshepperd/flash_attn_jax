@@ -44,11 +44,8 @@ jobs:
           # manylinux docker image, but I haven't figured out how to install CUDA on manylinux.
           os: [ubuntu-20.04]
           python-version: ['3.9', '3.10', '3.11', '3.12']
-          jax-version: ['0.4.20', '0.4.24']
-          cuda-version: ['11.8.0', '12.2.2', '12.3.1']
-          exclude:
-            - jax-version: '0.4.24'
-              cuda-version: '12.2.2'
+          jax-version: ['0.4.24']
+          cuda-version: ['11.8.0', '12.3.1']
 
     steps:
       - name: Checkout
@@ -180,7 +177,7 @@ jobs:
 
       - name: Build core package
         run: |
-          python setup.py sdist --dist-dir=dist
+          CUDA_HOME=/ python setup.py sdist --dist-dir=dist
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
