@@ -1,2 +1,2 @@
 from .flash import flash_mha
-__version__ = 'v2.5.5'
+__version__ = 'v0.1.0'

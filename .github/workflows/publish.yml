@@ -151,34 +151,42 @@ jobs:
           asset_name: ${{env.wheel_name}}
           asset_content_type: application/*
 
-  # publish_package:
-  #   name: Publish package
-  #   needs: [build_wheels]
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{env.wheel_name}}
+          path: ./dist/${{env.wheel_name}}
 
-  #   runs-on: ubuntu-latest
+  publish_package:
+    name: Publish package
+    needs: [build_wheels]
 
-  #   steps:
-  #     - uses: actions/checkout@v3
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
 
-  #     - uses: actions/setup-python@v4
-  #       with:
-  #         python-version: '3.10'
+    steps:
+      - uses: actions/checkout@v3
 
-  #     - name: Install dependencies
-  #       run: |
-  #         pip install ninja packaging setuptools wheel twine
-  #         # We don't want to download anything CUDA-related here
-  #         pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-  #     - name: Build core package
-  #       env:
-  #         FLASH_ATTENTION_SKIP_CUDA_BUILD: "TRUE"
-  #       run: |
-  #         python setup.py sdist --dist-dir=dist
+      - name: Install dependencies
+        run: |
+          pip install setuptools==68.0.0
+          pip install git+https://github.com/nshepperd/setuptools-cuda-cpp
+          pip install ninja packaging wheel pybind11
 
-  #     - name: Deploy
-  #       env:
-  #         TWINE_USERNAME: "__token__"
-  #         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-  #       run: |
-  #         python -m twine upload dist/*
+      - name: Build core package
+        run: |
+          python setup.py sdist --dist-dir=dist
+
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
