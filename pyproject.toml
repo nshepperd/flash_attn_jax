@@ -1,2 +1,2 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools-cuda-cpp", "packaging", "pybind11"]
+requires = ["setuptools", "wheel", "setuptools-cuda-cpp @ git+https://github.com/nshepperd/setuptools-cuda-cpp", "packaging", "pybind11"]
