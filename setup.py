@@ -10,7 +10,6 @@ import platform
 
 from setuptools import setup, find_packages
 from setuptools_cuda_cpp import CUDAExtension, BuildExtension, fix_dll
-# from setuptools_cuda.inspections import find_cuda_home
 import pybind11
 
 import subprocess
@@ -53,14 +52,31 @@ def get_platform():
     else:
         raise ValueError("Unsupported platform: {}".format(sys.platform))
 
+def locate_cuda():
+    if 'sdist' in sys.argv:
+        return None
+    cuda_dir = os.environ.get("CUDA_HOME", None)
+    if cuda_dir is None:
+        if os.path.exists("/usr/local/cuda"):
+            cuda_dir = "/usr/local/cuda"
+            os.environ["CUDA_HOME"] = cuda_dir
+        elif os.path.exists("/opt/cuda"):
+            cuda_dir = "/opt/cuda"
+            os.environ["CUDA_HOME"] = cuda_dir
+        else:
+            raise RuntimeError("CUDA_HOME not set and no CUDA installation found")
+    return cuda_dir
 
-def get_cuda_bare_metal_version(cuda_dir):
+
+def get_cuda_version():
+    cuda_dir = locate_cuda()
+    if cuda_dir is None:
+        return ""
     raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
     output = raw_output.split()
     release_idx = output.index("release") + 1
-    bare_metal_version = parse(output[release_idx].split(",")[0])
-
-    return raw_output, bare_metal_version
+    version = output[release_idx].split(",")[0].split('.')[0] # should be 11 or 12
+    return f'+cu{version}'
 
 
 def append_nvcc_threads(nvcc_extra_args):
@@ -180,9 +196,9 @@ def get_package_version():
     public_version = ast.literal_eval(version_match.group(1))
     local_version = os.environ.get("FLASH_ATTN_LOCAL_VERSION")
     if local_version:
-        return f"{public_version}+{local_version}"
+        return f"{public_version}+{local_version}{get_cuda_version()}"
     else:
-        return str(public_version)
+        return f"{public_version}{get_cuda_version()}"
 
 
 class NinjaBuildExtension(BuildExtension):
