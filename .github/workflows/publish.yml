@@ -72,6 +72,7 @@ jobs:
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-manylinux_x86_64
           CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux2014_x86_64_cuda_${{ matrix.cuda-version }}
+          CIBW_BUILD_VERBOSITY: 1
 
       - name: Log Built Wheels
         run: |
