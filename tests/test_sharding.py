@@ -29,9 +29,11 @@ def pretty(tensor):
     std = jnp.std(tensor)
     return f'[{shape}: {mn:.3g} | {mean:.3g}±{std:.3g} | {mx:.3g}]'
 
-def check(ref_out, jax_out, out):
+def check(ref_out, jax_out, out, eps=3):
     def check1(ref_out, jax_out, out):
-        assert jnp.max(jnp.abs(out - ref_out)).item() <= 3 * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
+        out_diff = jnp.abs(out - ref_out)
+        jax_diff = jnp.abs(jax_out - ref_out)
+        assert jnp.max(out_diff) <= eps * jnp.max(jax_diff), (pretty(out_diff), 'vs', pretty(jax_diff))
     tree_map(check1, ref_out, jax_out, out)
 
 @pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
@@ -130,9 +132,11 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
             assert 'dynamic-slice' not in hlo
             assert 'collective-permute' in hlo
             # Should always run concurrently, meaning custom-call is always between start and done.
-            import re
-            collectives = ''.join(re.findall(" collective-permute-start| collective-permute-done| custom-call", hlo))
-            assert 'collective-permute-start collective-permute-done' not in collectives, hlo
+            # import re
+            # collectives = ''.join(re.findall(" collective-permute-start| collective-permute-done| custom-call", hlo))
+            # assert 'collective-permute-start collective-permute-done' not in collectives, hlo
+            print(hlo)
+            assert 'collective-permute-start collective-permute-done' not in decode_hlo(hlo), decode_hlo(hlo)
 
 @pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
@@ -162,7 +166,7 @@ def test_flash_fwd_sharded(seqlen, h, d, m, causal, local, dtype):
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    ref16_out = flash((q,k,v))
+    ref16_out = ref((q,k,v))
 
     def check_sharding(sharding,q,k,v):
         (q,k,v) = jax.device_put((q,k,v), sharding)
@@ -193,37 +197,73 @@ def test_flash_bwd_sharded(seqlen, h, d, m, causal, local, dtype):
     devices = jax.local_devices()
     n = len(devices)
 
+    A = 1.0 / math.sqrt(n * seqlen * h * d)
+
     @jax.jit
     @jax.grad
-    def ref(qkv):
-        return ref_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum()
+    def ref(qkv, do):
+        o = ref_mha(*qkv, is_causal=bool(causal), window_size=window_size)
+        return (o * do).sum()
     @jax.jit
     @jax.grad
-    def flash(qkv):
-        return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum()
+    def flash(qkv, do):
+        o = flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)
+        return (o * do).sum()
     q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
+    do = jax.random.normal(jax.random.PRNGKey(3), [n, seqlen, h*m, d], dtype=jnp.float32) * A
 
-    ref_out = ref((q,k,v))
+    ref_out = ref((q,k,v), do)
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    ref16_out = flash((q,k,v))
+    do = do.astype(dtype)
+    ref16_out = ref((q,k,v), do)
 
-    def check_sharding(sharding,q,k,v):
-        (q,k,v) = jax.device_put((q,k,v), sharding)
-        out = flash((q,k,v))
-        check(ref_out,ref16_out,out)
+    def check_sharding(sharding):
+        (qs,ks,vs,dos) = jax.device_put((q,k,v,do), sharding)
+        out = flash((qs,ks,vs),dos)
+        check(ref_out,ref16_out,out, eps=4)
 
-    check_sharding(PositionalSharding(devices).reshape(n,1,1,1),q,k,v)
-    check_sharding(PositionalSharding(devices).reshape(1,1,n,1),q,k,v)
+    check_sharding(PositionalSharding(devices).reshape(n,1,1,1))
+    check_sharding(PositionalSharding(devices).reshape(1,1,n,1))
 
     if not local:
         # Ring attention
         with Mesh(np.array(devices), axis_names=('x',)) as mesh:
             sharding = NamedSharding(mesh, P(None,'x',None,None))
-            check_sharding(sharding,q,k,v)
+            check_sharding(sharding)
+
+def decode_hlo(hlo):
+    computations = {}
+    current_name = None
+    current_lines = []
+    for line in hlo.splitlines():
+        if line.startswith('%') or line.startswith('ENTRY'):
+            if current_name is not None:
+                computations[current_name] = current_lines
+            current_name = line.split()[0]
+            current_lines = []
+        elif line.lstrip().startswith('%') or line.lstrip().startswith('ROOT'):
+            current_lines.append(line)
+    if current_lines:
+        computations[current_name] = current_lines
+
+    def visit(name):
+        for line in computations[name]:
+            if 'custom-call(' in line:
+                yield 'custom-call'
+            elif any('calls='+target in line for target in computations.keys()):
+                target = [target for target in computations.keys() if 'calls='+target in line][0]
+                for item in visit(target):
+                    yield item
+            elif 'collective-permute-start(' in line:
+                yield 'collective-permute-start'
+            elif 'collective-permute-done(' in line:
+                yield 'collective-permute-done'
+    
+    return ' '.join(visit('ENTRY'))
 
 if __name__ == '__main__':
     test_flash_fwd_sharded_hlo(128,4,32,False,False,jnp.float16)

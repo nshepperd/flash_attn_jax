@@ -38,13 +38,11 @@ def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
         lse = einops.rearrange(lse, 'n h x l -> n (h x) l')
         return o.astype(q.dtype), lse.astype(jnp.float32)
     else:
-        att = jnp.einsum('nlhd,nLhd->nhlL',q,k)*softmax_scale
-        [_, _, l, L] = att.shape
-        mask = make_mask(l,L,is_causal,window_size)
-        att = jnp.where(mask, att, float('-inf'))
-        lse = jax.nn.logsumexp(att, axis=-1) #nhl
-        att = jnp.exp(att - lse[...,None])
-        o = jnp.einsum('nhlL,nLhd->nlhd',att,v)
+        S = jnp.einsum('nlhd,nLhd->nhlL',q,k)
+        S = jnp.where(mask, S, float('-inf'))
+        lse = jax.nn.logsumexp(S*softmax_scale, axis=-1) #nhl
+        P = jax.nn.softmax(S*softmax_scale, axis=-1) #jnp.exp(att - lse[...,None])
+        o = jnp.einsum('nhlL,nLhd->nlhd',P,v)
         return o.astype(q.dtype), lse.astype(jnp.float32)
 
 def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=None):

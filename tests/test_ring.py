@@ -17,6 +17,7 @@ from jax.tree_util import tree_map
 from jax.experimental.shard_map import shard_map
 from functools import partial
 import einops
+import math
 
 from flash_attn_jax.ring_attention import ring_fwd, ring_bwd
 from .ref_mha import ref_fwd, ref_bwd
@@ -87,14 +88,17 @@ def test_ring_fwd(seqlen, h, d, m, causal):
 
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("m", [1,2])
-@pytest.mark.parametrize("d", [8])
-@pytest.mark.parametrize("h", [1])
-@pytest.mark.parametrize("seqlen", [2])
+@pytest.mark.parametrize("d", [32])
+@pytest.mark.parametrize("h", [4])
+@pytest.mark.parametrize("seqlen", [128])
 def test_ring_bwd(seqlen, h, d, m, causal):
     window_size = (-1,-1)
 
     devices = jax.devices(backend='cpu')
     n_device = len(devices)
+
+    n = 1
+    A = 1.0 / math.sqrt(n * seqlen * h * d)
 
     with Mesh(np.array(devices), axis_names=('x',)) as mesh:
         @jax.jit
@@ -114,11 +118,13 @@ def test_ring_bwd(seqlen, h, d, m, causal):
         q = jax.random.normal(jax.random.PRNGKey(0), [1, seqlen, h*m, d], dtype=jnp.float32)
         k = jax.random.normal(jax.random.PRNGKey(1), [1, seqlen, h, d], dtype=jnp.float32)
         v = jax.random.normal(jax.random.PRNGKey(2), [1, seqlen, h, d], dtype=jnp.float32)
-        do = jax.random.normal(jax.random.PRNGKey(3), [1, seqlen, h*m, d], dtype=jnp.float32)
+        do = jax.random.normal(jax.random.PRNGKey(3), [1, seqlen, h*m, d], dtype=jnp.float32) * A
         o_ref = ref(q,k,v,do)
         o_ring = ring(q,k,v,do)
+        # print(jnp.stack([o_ref[0], o_ring[0], o_ref[0] - o_ring[0]], axis=-1))
+        print(jnp.stack([o_ref[2], o_ring[2], o_ref[2] - o_ring[2]], axis=-1))
         for i in range(3):
-            assert jnp.allclose(o_ref[i], o_ring[i], rtol=1e-2, atol=1e-3)
+            assert jnp.allclose(o_ref[i], o_ring[i], rtol=1e-2, atol=1e-3), i
 
 if __name__ == '__main__':
     test_ref()
