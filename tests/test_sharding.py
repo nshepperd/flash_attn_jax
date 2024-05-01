@@ -6,6 +6,8 @@ if glob.glob('build/lib.linux-*'):
     sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
 sys.path.insert(0,'./src')
 
+import math
+import einops
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,23 +19,7 @@ from jax.tree_util import tree_map
 jax.config.update("jax_traceback_filtering", "off")
 
 from flash_attn_jax import flash_mha
-
-def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1)):
-    softmax_scale = 1/np.sqrt(q.shape[-1])
-    att = jnp.einsum('nlhd,nLhd->nhlL',q,k)
-
-    [_, _, l, L] = att.shape
-    mask = jnp.ones([l,L])
-    if is_causal:
-        mask = jnp.tril(mask)
-    if window_size[0] != -1:
-        mask = jnp.triu(mask, -window_size[0])
-    if window_size[1] != -1:
-        mask = jnp.tril(mask, window_size[1])
-    att = jnp.where(mask, att, float('-inf'))
-    att = jax.nn.softmax(att*softmax_scale, axis=-1)
-    o = jnp.einsum('nhlL,nLhd->nlhd',att,v)
-    return o
+from .ref_mha import ref_mha
 
 def pretty(tensor):
     shape = tensor.shape
@@ -55,7 +41,8 @@ def check(ref_out, jax_out, out):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4])
 @pytest.mark.parametrize("seqlen", [128])
-def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_fwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
@@ -68,7 +55,7 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
     def with_sharding(q_sharding, kv_sharding=None):
         if kv_sharding is None:
             kv_sharding = q_sharding
-        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=dtype)
+        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, m*h, d], dtype=dtype)
         k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
         v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
         q = jax.device_put(q, q_sharding)
@@ -106,7 +93,8 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4])
 @pytest.mark.parametrize("seqlen", [128])
-def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_bwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
@@ -118,7 +106,7 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
         return (flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)**2).sum()
 
     def with_sharding(sharding):
-        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=dtype)
+        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, m*h, d], dtype=dtype)
         k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
         v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
         (q,k,v) = jax.device_put((q,k,v), sharding)
@@ -153,7 +141,8 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4, 8])
 @pytest.mark.parametrize("seqlen", [128])
-def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_fwd_sharded(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
@@ -165,7 +154,7 @@ def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype):
     @jax.jit
     def flash(qkv):
         return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)
-    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
+    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
 
@@ -197,7 +186,8 @@ def test_flash_fwd_sharded(seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4, 8])
 @pytest.mark.parametrize("seqlen", [128])
-def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_bwd_sharded(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
@@ -211,7 +201,7 @@ def test_flash_bwd_sharded(seqlen, h, d, causal, local, dtype):
     @jax.grad
     def flash(qkv):
         return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum()
-    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
+    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
 

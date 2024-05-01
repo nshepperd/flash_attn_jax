@@ -19,45 +19,7 @@ from functools import partial
 import einops
 
 from flash_attn_jax.ring_attention import ring_fwd, ring_bwd
-
-def make_mask(R, C, is_causal, window_size):
-    mask = jnp.ones([R,C], dtype=jnp.int32)
-    if is_causal:
-        mask = jnp.tril(mask)
-    if window_size[0] != -1:
-        mask = jnp.triu(mask, -window_size[0])
-    if window_size[1] != -1:
-        mask = jnp.tril(mask, window_size[1])
-    return mask
-
-def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
-    if softmax_scale is None:
-        softmax_scale = 1/np.sqrt(q.shape[-1])
-    att = jnp.einsum('nlhd,nLhd->nhlL',q,k)*softmax_scale
-    [_, _, l, L] = att.shape
-    mask = make_mask(l,L,is_causal,window_size)
-    att = jnp.where(mask, att, float('-inf'))
-    lse = jax.nn.logsumexp(att, axis=-1) #nhl
-    att = jnp.exp(att - lse[...,None])
-    o = jnp.einsum('nhlL,nLhd->nlhd',att,v)
-    return o, lse
-
-def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=None):
-    if softmax_scale is None:
-        softmax_scale = 1/np.sqrt(q.shape[-1])
-    S = jnp.einsum('nlhd,nLhd->nhlL',q,k)*softmax_scale
-    D = einops.reduce(do * o, 'n l h d -> n h l', reduction='sum')
-    [_, _, l, L] = S.shape
-    mask = make_mask(l,L,is_causal,window_size)
-    S = jnp.where(mask, S, float('-inf'))
-    P = jnp.exp(S - lse[...,None]) # n h l L
-    dP = jnp.einsum('nlhd,nLhd->nhlL',do,v)
-    dv = jnp.einsum('nlhd,nhlL->nLhd',do,P)
-    dS = P * (dP - D[...,None])
-    dq = softmax_scale*jnp.einsum('nLhd,nhlL->nlhd',k,dS)
-    dk = softmax_scale*jnp.einsum('nlhd,nhlL->nLhd',q,dS)
-    return dq,dk,dv
-
+from .ref_mha import ref_fwd, ref_bwd
 
 def test_ref_bwd():
     """Test that ref_bwd matches autodiff and is splittable."""
@@ -91,10 +53,11 @@ def test_ref_bwd():
     assert jnp.allclose(dq_ref, dq_bwd, rtol=1e-2, atol=1e-3)
 
 @pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("m", [1,2])
 @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("h", [4])
 @pytest.mark.parametrize("seqlen", [128])
-def test_ring_fwd(seqlen, h, d, causal):
+def test_ring_fwd(seqlen, h, d, m, causal):
     window_size = (-1,-1)
 
     devices = jax.devices(backend='cpu')
@@ -114,7 +77,7 @@ def test_ring_fwd(seqlen, h, d, causal):
             softmax_scale = 1/np.sqrt(q.shape[-1])
             return ring_fwd(q, k, v, softmax_scale=softmax_scale, is_causal=bool(causal), axis_name='x', axis_size=n, mha_fwd=ref_fwd)[0]
 
-        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
+        q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
         k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
         v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
         o_ref = ref(q,k,v)
@@ -123,10 +86,11 @@ def test_ring_fwd(seqlen, h, d, causal):
 
 
 @pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("m", [1,2])
 @pytest.mark.parametrize("d", [8])
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("seqlen", [2])
-def test_ring_bwd(seqlen, h, d, causal):
+def test_ring_bwd(seqlen, h, d, m, causal):
     window_size = (-1,-1)
 
     devices = jax.devices(backend='cpu')
@@ -147,10 +111,10 @@ def test_ring_bwd(seqlen, h, d, causal):
             dq,dk,dv = ring_bwd(do,q,k,v,o,lse, softmax_scale=softmax_scale, is_causal=bool(causal), axis_name='x', axis_size=n_device, mha_bwd=ref_bwd)
             return dq,dk,dv
 
-        q = jax.random.normal(jax.random.PRNGKey(0), [1, seqlen, h, d], dtype=jnp.float32)
+        q = jax.random.normal(jax.random.PRNGKey(0), [1, seqlen, h*m, d], dtype=jnp.float32)
         k = jax.random.normal(jax.random.PRNGKey(1), [1, seqlen, h, d], dtype=jnp.float32)
         v = jax.random.normal(jax.random.PRNGKey(2), [1, seqlen, h, d], dtype=jnp.float32)
-        do = jax.random.normal(jax.random.PRNGKey(3), [1, seqlen, h, d], dtype=jnp.float32)
+        do = jax.random.normal(jax.random.PRNGKey(3), [1, seqlen, h*m, d], dtype=jnp.float32)
         o_ref = ref(q,k,v,do)
         o_ring = ring(q,k,v,do)
         for i in range(3):

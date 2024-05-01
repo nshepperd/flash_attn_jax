@@ -2,6 +2,7 @@
 #include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
 #include <pybind11/pybind11.h>
+#include <cute/layout.hpp>
 
 #include "flash.h"
 #include "exception.h"
@@ -65,18 +66,24 @@ void set_params_dgrad(Flash_bwd_params &params,
     params.dq_ptr = dq_ptr;
     params.dk_ptr = dk_ptr;
     params.dv_ptr = dv_ptr;
-    params.dq_row_stride = params.q_row_stride;
-    params.dk_row_stride = params.k_row_stride;
-    params.dv_row_stride = params.v_row_stride;
-    params.dq_head_stride = params.q_head_stride;
-    params.dk_head_stride = params.k_head_stride;
-    params.dv_head_stride = params.v_head_stride;
+
+    // dk&dv is expanded to the same h as dq for MQA, we sum it later
+    auto dq = cute::compact_row_major(cute::make_shape(b, seqlen_q, h, d));
+	auto dk = cute::compact_row_major(cute::make_shape(b, seqlen_k, h, d));
+	auto dv = cute::compact_row_major(cute::make_shape(b, seqlen_k, h, d));
+
+    params.dq_row_stride = cute::get<1>(dq);
+    params.dk_row_stride = cute::get<1>(dk);
+    params.dv_row_stride = cute::get<1>(dv);
+    params.dq_head_stride = cute::get<2>(dq);
+    params.dk_head_stride = cute::get<2>(dk);
+    params.dv_head_stride = cute::get<2>(dv);
 
     if (cu_seqlens_q_d == nullptr) {
         params.do_batch_stride = params.o_batch_stride;
-        params.dq_batch_stride = params.q_batch_stride;
-        params.dk_batch_stride = params.k_batch_stride;
-        params.dv_batch_stride = params.v_batch_stride;
+        params.dq_batch_stride = cute::get<0>(dq);
+        params.dk_batch_stride = cute::get<0>(dk);
+        params.dv_batch_stride = cute::get<0>(dv);
     }
 
     params.dq_accum_ptr = dq_accum_d;
@@ -273,9 +280,8 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
     }
 
 
-	// Not sure what this is about. It needs extra scratch space for dk and dv when hk > h?
-	// Maybe because it's partitioning by n and h.
-	// disabled for now and figure out how to handle it later
+    // For MQA, dk and dv are expanded to the same n_heads as dq (handled in xla).
+    // After returning the result, it gets reduced to the original size by summing, so we don't need to do anything here.
 	void* dk_expanded = dk;
 	void* dv_expanded = dv;
     // at::Tensor dk_expanded, dv_expanded;
@@ -376,7 +382,7 @@ mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_l
 
     // For MQA/GQA we need to sum dK and dV across the groups
     if (num_heads_k != num_heads) {
-		CHECK(false, "don't handle MQA yet");
+		// CHECK(false, "don't handle MQA yet");
         // at::sum_out(dk, at::reshape(dk_expanded, {batch_size, seqlen_k, num_heads_k, num_heads / num_heads_k, head_size}), {3});
         // at::sum_out(dv, at::reshape(dv_expanded, {batch_size, seqlen_k, num_heads_k, num_heads / num_heads_k, head_size}), {3});
     }

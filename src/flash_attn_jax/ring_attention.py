@@ -79,14 +79,15 @@ def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal
 
 def ring_bwd(do,q,k,v,o,lse, axis_name, axis_size, mha_bwd, softmax_scale=None, is_causal=False):
     [n,l,h,d] = q.shape
+    [n,lk,hk,d] = k.shape
     if softmax_scale is None:
         softmax_scale = 1/math.sqrt(d)
 
     ix = jax.lax.axis_index(axis_name)
 
     dq = jnp.zeros([n,l,h,d], jnp.float32)
-    dk = jnp.zeros([n,l,h,d], jnp.float32)
-    dv = jnp.zeros([n,l,h,d], jnp.float32)
+    dk = jnp.zeros([n,lk,hk,d], jnp.float32)
+    dv = jnp.zeros([n,lk,hk,d], jnp.float32)
 
     # scan :: (c -> a -> (c, b)) -> c -> [a] -> (c, [b])
     def f(acc, _):

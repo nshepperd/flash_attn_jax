@@ -10,7 +10,6 @@ from jax.interpreters import mlir
 from jax.interpreters import xla
 from jax.interpreters.mlir import ir
 from jax.lib import xla_client
-from jaxlib.hlo_helpers import custom_call
 from jax.experimental.custom_partitioning import custom_partitioning
 
 from jax.sharding import PartitionSpec as P
@@ -19,6 +18,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PositionalSharding
 
 from einops import rearrange
+import einops
 import math
 
 import flash_attn_jax_lib.flash_api as flash_api
@@ -33,6 +33,10 @@ _flash_mha_bwd_hlo_p = core.Primitive("flash_mha_bwd_hlo")
 _flash_mha_bwd_hlo_p.multiple_results = True
 _flash_mha_bwd_hlo_p.def_impl(partial(xla.apply_primitive, _flash_mha_bwd_hlo_p))
 
+_custom_call_p = core.Primitive("custom_call")
+_custom_call_p.multiple_results = True
+_custom_call_p.def_impl(partial(xla.apply_primitive, _custom_call_p))
+
 # ==== Primitive wrapper ====
 
 def _flash_mha_fwd_hlo(q, k, v, softmax_scale, is_causal, window_size):
@@ -42,6 +46,9 @@ def _flash_mha_fwd_hlo(q, k, v, softmax_scale, is_causal, window_size):
 def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size):
     dq, dk, dv = _flash_mha_bwd_hlo_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size)
     return dq, dk, dv
+
+def custom_call(*args, call_target_name, result_types, backend_config, operand_layouts, result_layouts):
+    return _custom_call_p.bind(*args, call_target_name=call_target_name, result_types=result_types, backend_config=backend_config, operand_layouts=operand_layouts, result_layouts=result_layouts)
 
 # ==== HLO lowerings ====
 
@@ -112,7 +119,7 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
 
         out_types = [ir.RankedTensorType.get(o_shape, element_type), lse_type]
 
-        (o, lse) = custom_call(
+        (o, lse) = mlir.custom_call(
             b"flash_mha_fwd",
             result_types=out_types,
             operands=[q_padded, k_padded, v_padded],
@@ -125,7 +132,7 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
         return (o,lse)
     else:
         out_types = [ir.RankedTensorType.get([n, l, h, d], element_type), lse_type]
-        out = custom_call(
+        out = mlir.custom_call(
             b"flash_mha_fwd",
             result_types=out_types,
             operands=[q, k, v],
@@ -155,6 +162,7 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
     assert q_type == v_type
     assert q_type == out_type
     assert type(lse_type) in [ir.F32Type]
+    dtype = q_type
 
     dout_shape = ir.RankedTensorType(dout.type).shape
     q_shape = ir.RankedTensorType(q.type).shape
@@ -184,49 +192,45 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
         flash_api.BF16 if type(q_type) == ir.BF16Type else flash_api.FP16,
         0)
 
-    if d % 8 != 0:
-        # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
-        dpad = 8 - d%8
+    def fwd(dout, q, k, v, out, lse):
+        dpad = (8 - d%8) % 8
+        if dpad > 0:
+            # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
+            q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            out = jnp.pad(out, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            dout = jnp.pad(dout, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
 
-        z = np.array(0.0, dtype=ir_type_to_dtype(q_type))
-        z = mlir.ir_constant(z)
-        q_padded = mlir.hlo.PadOp(q,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        k_padded = mlir.hlo.PadOp(k,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        v_padded = mlir.hlo.PadOp(v,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        out_padded = mlir.hlo.PadOp(out,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        dout_padded = mlir.hlo.PadOp(dout,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-
-        # Outputs are the same shape as the q,k,v (including padding)
-        out_types = [q_padded.type, k_padded.type, v_padded.type]
+        # For MQA/GQA, hq != hk, but we pass a hq sized output tensor to the kernel and sum over it afterwards to reduce the size.
+        out_types = [ir.RankedTensorType.get([n, lq, hq, d+dpad], dtype),
+                    ir.RankedTensorType.get([n, lk, hq, d+dpad], dtype),
+                    ir.RankedTensorType.get([n, lk, hq, d+dpad], dtype)]
+        out_layouts = default_layouts([n, lq, hq, d+dpad], [n, lk, hq, d+dpad], [n, lk, hq, d+dpad])
 
         dq, dk, dv = custom_call(
-            b"flash_mha_bwd",
-            result_types=out_types,
-            operands=[dout_padded, q_padded, k_padded, v_padded, out_padded, lse],
+            dout, q, k, v, out, lse,
+            call_target_name=b"flash_mha_bwd",
+            operand_layouts=default_layouts(dout.shape, q.shape, k.shape, v.shape, out.shape, lse.shape),
             backend_config=opaque,
-            operand_layouts=value_layouts(dout_padded, q_padded, k_padded, v_padded, out_padded, lse),
-            result_layouts=value_layouts(q_padded, k_padded, v_padded), # dq, dk, dv
-        ).results
+            result_types=out_types,
+            result_layouts=out_layouts,
+        )
 
-        dq = mlir.hlo.SliceOp(dq, [0,0,0,0], tuple(q_shape), [1,1,1,1]).result
-        dk = mlir.hlo.SliceOp(dk, [0,0,0,0], tuple(k_shape), [1,1,1,1]).result
-        dv = mlir.hlo.SliceOp(dv, [0,0,0,0], tuple(v_shape), [1,1,1,1]).result
+        if hq != hk:
+            assert hq > hk and hq % hk == 0
+            m = hq // hk
+            dk = einops.reduce(dk, 'n l (h m) d -> n l h d', reduction='sum', h=hk)
+            dv = einops.reduce(dv, 'n l (h m) d -> n l h d', reduction='sum', h=hk)
+        
+        if dpad > 0:
+            dq = dq[:,:,:,:d]
+            dk = dk[:,:,:,:d]
+            dv = dv[:,:,:,:d]
 
         return dq, dk, dv
-    else:
-        out_types = [ir.RankedTensorType.get(q_shape, q_type),
-                     ir.RankedTensorType.get(k_shape, k_type),
-                     ir.RankedTensorType.get(v_shape, v_type)]
-
-        out = custom_call(
-            b"flash_mha_bwd",
-            result_types=out_types,
-            operands=[dout, q, k, v, out, lse],
-            backend_config=opaque,
-            operand_layouts=default_layouts(dout_shape, q_shape, k_shape, v_shape, out_shape, lse_shape),
-            result_layouts=default_layouts(*[o.shape for o in out_types]),
-        ).results
-        return out
+    
+    return mlir.lower_fun(fwd, multiple_results=True)(ctx, dout, q, k, v, out, lse)
 
 mlir.register_lowering(
     _flash_mha_bwd_hlo_p,
@@ -266,3 +270,32 @@ def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, is_caus
         ShapedArray(v.shape, v_dtype, named_shape=v.named_shape),
     )
 _flash_mha_bwd_hlo_p.def_abstract_eval(_flash_mha_bwd_abstract)
+
+# ==== Custom Call ====
+
+def _custom_call_abstract_eval(*args, call_target_name, result_types, backend_config, operand_layouts, result_layouts):
+    def convert(ty):
+        ty = ir.RankedTensorType(ty)
+        shape = tuple(ty.shape)
+        dtype = ir_type_to_dtype(ty.element_type)
+        return ShapedArray(shape, dtype)
+    out_types = [convert(o) for o in result_types]
+    return tuple(out_types)
+
+_custom_call_p.def_abstract_eval(_custom_call_abstract_eval)
+
+def _custom_call_hlo_lowering(ctx, *args, call_target_name, result_types, backend_config, operand_layouts, result_layouts):
+    out = mlir.custom_call(
+            call_target_name,
+            operands=args,
+            result_types=result_types,
+            backend_config=backend_config,
+            operand_layouts=operand_layouts,
+            result_layouts=result_layouts,
+        ).results
+    return out
+
+mlir.register_lowering(
+    _custom_call_p,
+    _custom_call_hlo_lowering
+)

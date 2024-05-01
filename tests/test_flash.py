@@ -9,24 +9,11 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 import numpy as np
+import math
+import einops
 
 from flash_attn_jax import flash_mha
-
-def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1)):
-    softmax_scale = 1/np.sqrt(q.shape[-1])
-    att = jnp.einsum('nlhd,nLhd->nhlL',q,k)
-    [_, _, l, L] = att.shape
-    mask = jnp.ones([l,L])
-    if is_causal:
-        mask = jnp.tril(mask)
-    if window_size[0] != -1:
-        mask = jnp.triu(mask, -window_size[0])
-    if window_size[1] != -1:
-        mask = jnp.tril(mask, window_size[1])
-    att = jnp.where(mask, att, float('-inf'))
-    att = jax.nn.softmax(att*softmax_scale, axis=-1)
-    o = jnp.einsum('nhlL,nLhd->nlhd',att,v)
-    return o
+from .ref_mha import ref_mha
 
 def pretty(tensor):
     shape = tensor.shape
@@ -48,13 +35,14 @@ def check(ref_out, jax_out, out):
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
-@pytest.mark.parametrize("h", [1, 4, 8])
+@pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
-def test_flash_fwd(n, seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
-    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
+    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
     ref_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
@@ -72,16 +60,20 @@ def test_flash_fwd(n, seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("h", [1, 4, 8])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
-def test_flash_bwd(n, seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_flash_bwd(n, seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
+    A = 1.0 / math.sqrt(n * seqlen * h * d)
 
     @jax.grad
     def ref(qkv):
-        return ref_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum()
+        return ref_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum() * A
+
+    @jax.jit
     @jax.grad
     def flash(qkv):
-        return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum()
-    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h, d], dtype=jnp.float32)
+        return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum() * A
+    q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
     ref_out = ref((q,k,v))
@@ -89,6 +81,7 @@ def test_flash_bwd(n, seqlen, h, d, causal, local, dtype):
     k = k.astype(dtype)
     v = v.astype(dtype)
     jax_out = ref((q,k,v))
+    # print(flash.lower((q,k,v)).compile().as_text())
     out = flash((q,k,v))
     check(ref_out, jax_out, out)
 
@@ -125,4 +118,4 @@ def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
     check(ref_out, f16_out, out)
 
 if __name__ == '__main__':
-    test_flash_fwd(1,97,1,59,False,False,jnp.float16)
+    test_flash_bwd(1,4,1,32,4,False,False,jnp.float16)
