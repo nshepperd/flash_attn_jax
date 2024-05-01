@@ -4,6 +4,7 @@ if glob.glob('build/lib.linux-*'):
     sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
 sys.path.insert(0,'./src')
 
+from functools import partial
 import pytest
 import jax
 import jax.numpy as jnp
@@ -100,21 +101,113 @@ def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
     k = jax.random.normal(jax.random.PRNGKey(1), [x, n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [x, n, seqlen, h, d], dtype=jnp.float32)
 
-    @jax.jit
     def ref(q,k,v):
         return ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
-    @jax.jit
     def flash(q,k,v):
         return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
 
-    ref_out = jnp.stack([ref(q[i],k[i],v[i]) for i in range(x)])
+    ref_out = jax.vmap(ref)(q,k,v)
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    f16_out = jnp.stack([ref(q[i],k[i],v[i]) for i in range(x)])
-
+    f16_out = jax.vmap(ref)(q,k,v)
 
     out = jax.vmap(flash)(q,k,v)
+    check(ref_out, f16_out, out)
+
+@pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
+@pytest.mark.parametrize("local", ['local',''])
+@pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("d", [59, 32])
+@pytest.mark.parametrize("h", [1, 4])
+@pytest.mark.parametrize("seqlen", [97, 128])
+@pytest.mark.parametrize("n", [1])
+def test_flash_fwd_vmapq(n, seqlen, h, d, causal, local, dtype):
+    window_size = (3,3) if local else (-1,-1)
+
+    x = 4
+    q = jax.random.normal(jax.random.PRNGKey(0), [x, n, seqlen, h, d], dtype=jnp.float32)
+    k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
+    v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
+
+    def ref(q,k,v):
+        return ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+    def flash(q,k,v):
+        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+
+    ref_out = jax.vmap(ref, in_axes=(0,None,None))(q,k,v)
+    q = q.astype(dtype)
+    k = k.astype(dtype)
+    v = v.astype(dtype)
+    f16_out = jax.vmap(ref, in_axes=(0,None,None))(q,k,v)
+
+    out = jax.vmap(flash, in_axes=(0,None,None))(q,k,v)
+    check(ref_out, f16_out, out)
+
+@pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
+@pytest.mark.parametrize("local", ['local',''])
+@pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("d", [59, 32])
+@pytest.mark.parametrize("h", [1, 4])
+@pytest.mark.parametrize("seqlen", [97, 128])
+@pytest.mark.parametrize("n", [1])
+def test_flash_bwd_vmap(n, seqlen, h, d, causal, local, dtype):
+    window_size = (3,3) if local else (-1,-1)
+
+    x = 4
+    q = jax.random.normal(jax.random.PRNGKey(0), [x, n, seqlen, h, d], dtype=jnp.float32)
+    k = jax.random.normal(jax.random.PRNGKey(1), [x, n, seqlen, h, d], dtype=jnp.float32)
+    v = jax.random.normal(jax.random.PRNGKey(2), [x, n, seqlen, h, d], dtype=jnp.float32)
+    do = jax.random.normal(jax.random.PRNGKey(3), [x, n, seqlen, h, d], dtype=jnp.float32)
+
+    def func(mha, q,k,v):
+        @partial(jax.vmap, in_axes=(0,0,0))
+        def fwd(q,k,v):
+            return mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+        o, bwd = jax.vjp(fwd,q,k,v)
+        return bwd(do)
+
+    ref_out = func(ref_mha, q,k,v)
+    q = q.astype(dtype)
+    k = k.astype(dtype)
+    v = v.astype(dtype)
+    do = do.astype(dtype)
+    f16_out = func(ref_mha, q,k,v)
+
+    out = func(flash_mha, q,k,v)
+    check(ref_out, f16_out, out)
+
+@pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
+@pytest.mark.parametrize("local", ['local',''])
+@pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("d", [59, 32])
+@pytest.mark.parametrize("h", [1, 4])
+@pytest.mark.parametrize("seqlen", [97, 128])
+@pytest.mark.parametrize("n", [1])
+def test_flash_bwd_vmapq(n, seqlen, h, d, causal, local, dtype):
+    window_size = (3,3) if local else (-1,-1)
+
+    x = 4
+    q = jax.random.normal(jax.random.PRNGKey(0), [x, n, seqlen, h, d], dtype=jnp.float32)
+    k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
+    v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
+    do = jax.random.normal(jax.random.PRNGKey(3), [x, n, seqlen, h, d], dtype=jnp.float32)
+
+    def func(mha, q,k,v):
+        @partial(jax.vmap, in_axes=(0,None,None))
+        def fwd(q,k,v):
+            return mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+        o, bwd = jax.vjp(fwd,q,k,v)
+        return bwd(do)
+
+    ref_out = func(ref_mha, q,k,v)
+    q = q.astype(dtype)
+    k = k.astype(dtype)
+    v = v.astype(dtype)
+    do = do.astype(dtype)
+    f16_out = func(ref_mha, q,k,v)
+
+    out = func(flash_mha, q,k,v)
     check(ref_out, f16_out, out)
 
 if __name__ == '__main__':
