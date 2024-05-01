@@ -39,7 +39,7 @@ _flash_mha_bwd_p.multiple_results = True
 _flash_mha_bwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_bwd_p))
 
 try:
-    # JAX 0.4.24 and above requires this.
+    # JAX 0.4.24 and above requires this because of custom partitioning.
     import jax._src.dispatch
     jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_bwd_p)
     jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_fwd_p)

@@ -22,6 +22,7 @@ from einops import rearrange
 import math
 
 from .flash_hlo import _flash_mha_fwd_hlo, _flash_mha_bwd_hlo
+from .ring_attention import ring_fwd, ring_bwd
 
 # ==== Sharding ====
 
@@ -30,12 +31,20 @@ _flash_mha_bwd_hlo_sharded = custom_partitioning(_flash_mha_bwd_hlo, static_argn
 
 from jax._src.ad_checkpoint import _optimization_barrier
 
+def is_replicated(sharding):
+    return (isinstance(sharding, PositionalSharding) and sharding.shape == (1,)) or (isinstance(sharding, NamedSharding) and len(sharding.spec) == 0)
+
 def partition_fwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, result_shape):
     result_shardings = jax.tree_map(lambda x: x.sharding, result_shape)
     arg_shardings = jax.tree_map(lambda x: x.sharding, arg_shapes)
 
     q_sharding = arg_shardings[0]
-    if isinstance(q_sharding, PositionalSharding):
+    k_sharding = arg_shardings[1]
+    v_sharding = arg_shardings[2]
+    assert q_sharding == k_sharding and q_sharding == v_sharding, "Only support q, k, v sharing the same sharding."
+    if is_replicated(q_sharding):
+        result_sharding = (q_sharding, q_sharding)
+    elif isinstance(q_sharding, PositionalSharding):
         (n,l,h,d) = q_sharding.shape
         assert d == 1, "Sharding across `d` won't be efficient, so it's not supported."
         assert l == 1, "For ring attention, use `with Mesh(...) as mesh` and NamedSharding."
@@ -53,7 +62,7 @@ def partition_fwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, resul
             axis_name = l
             axis_size = mesh.shape[axis_name]
             # ring attention
-            return mesh, partial(ring_fwd, softmax_scale, is_causal, axis_name, axis_size), result_shardings, arg_shardings
+            return mesh, partial(ring_fwd, softmax_scale=softmax_scale, is_causal=is_causal, axis_name=axis_name, axis_size=axis_size, mha_fwd=_flash_mha_fwd_hlo), result_shardings, arg_shardings
         else:
             result_shardings = q_sharding, NamedSharding(mesh, P(n,h,l))
             arg_shardings = q_sharding, q_sharding, q_sharding
@@ -64,7 +73,12 @@ def partition_fwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, resul
 def infer_sharding_fwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, result_shape):
     arg_shardings = jax.tree_map(lambda x: x.sharding, arg_shapes)
     q_sharding = arg_shardings[0]
-    if isinstance(q_sharding, PositionalSharding):
+    k_sharding = arg_shardings[1]
+    v_sharding = arg_shardings[2]
+    assert q_sharding == k_sharding and q_sharding == v_sharding, "Only support q, k, v sharing the same sharding."
+    if is_replicated(q_sharding):
+        result_sharding = (q_sharding, q_sharding)
+    elif isinstance(q_sharding, PositionalSharding):
         [n,l,h,d] = q_sharding.shape
         result_sharding = (q_sharding, # [n,l,h,d]
                            q_sharding.replicate(3).reshape(n,l,h).transpose((0,2,1)) # [n,h,l]
@@ -73,6 +87,8 @@ def infer_sharding_fwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, 
         [n,l,h,d] = q_sharding.spec
         result_sharding = (q_sharding,
                            NamedSharding(q_sharding.mesh, P(n,h,l)))
+    else:
+        raise ValueError("Unsupported sharding type.", type(q_sharding))
     return result_sharding
 
 _flash_mha_fwd_hlo_sharded.def_partition(
@@ -99,7 +115,10 @@ def partition_bwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, resul
     v_sharding = arg_shardings[3]
     o_sharding = arg_shardings[4]
     lse_sharding = arg_shardings[5]
-    if isinstance(q_sharding, PositionalSharding):
+    assert q_sharding == k_sharding and q_sharding == v_sharding, "Only support q, k, v sharing the same sharding."
+    if is_replicated(q_sharding):
+        result_shardings = (q_sharding,)*3
+    elif isinstance(q_sharding, PositionalSharding):
         assert q_sharding == k_sharding, "Expect q and k sharding to match"
         assert q_sharding == v_sharding, "Expect q and v sharding to match"
         [n, l, h, d] = q_sharding.shape
@@ -121,7 +140,7 @@ def partition_bwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, resul
             axis_name = l
             axis_size = mesh.shape[axis_name]
             # ring attention
-            return mesh, partial(ring_bwd, softmax_scale, is_causal, axis_name, axis_size), result_shardings, arg_shardings
+            return mesh, partial(ring_bwd, softmax_scale=softmax_scale, is_causal=is_causal, axis_name=axis_name, axis_size=axis_size, mha_bwd=_flash_mha_bwd_hlo), result_shardings, arg_shardings
         else:
             result_shardings = q_sharding, q_sharding, q_sharding
             lse_sharding = NamedSharding(mesh, P(n,h,l))
@@ -133,103 +152,3 @@ def partition_bwd(softmax_scale, is_causal, window_size, mesh, arg_shapes, resul
 _flash_mha_bwd_hlo_sharded.def_partition(
     infer_sharding_from_operands=infer_sharding_bwd,
     partition=partition_bwd)
-
-# ==== Ring Forward ====
-
-def ring_fwd(softmax_scale, is_causal, axis_name, axis_size, q,k,v):
-    [n,l,h,d] = q.shape
-
-    q_ix = jax.lax.axis_index(axis_name)
-    k_ix = jax.lax.axis_index(axis_name)
-
-    o = jnp.zeros([n,l,h,d], jnp.float32)
-    lse = jnp.full([n,h,l], float('-inf'), jnp.float32)
-
-    # scan :: (c -> a -> (c, b)) -> c -> [a] -> (c, [b])
-    def f(c, a):
-        (k, v, o, lse, k_ix) = c
-
-        o1, lse1 = o, lse
-        if is_causal:
-            o2, lse2 = jax.lax.switch((k_ix < q_ix).astype(jnp.int32) + (k_ix <= q_ix).astype(jnp.int32),
-                                    [
-                                        lambda q,k,v: (jnp.zeros([n,l,h,d], q.dtype), jnp.full([n,h,l], float('-inf'), jnp.float32)),
-                                        lambda q,k,v: _flash_mha_fwd_hlo(q,k,v, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1)),
-                                        lambda q,k,v: _flash_mha_fwd_hlo(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1)),
-                                    ], q, k, v)
-        else:
-            o2, lse2 = _flash_mha_fwd_hlo(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))
-        o2 = o2.astype(jnp.float32)
-
-        mx = jnp.maximum(lse1,lse2)
-        mn = jnp.minimum(lse1,lse2)
-        lse = jnp.log1p(jnp.exp(mn-mx)) + mx
-
-        o = (o1 * rearrange(jnp.exp(lse1 - lse), 'n h l -> n l h 1') +
-             o2 * rearrange(jnp.exp(lse2 - lse), 'n h l -> n l h 1'))
-        
-        k2 = jax.lax.ppermute(k, axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
-        v2 = jax.lax.ppermute(v, axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
-        k_ix = jax.lax.ppermute(k_ix, axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
-
-        return ((k2, v2, o, lse, k_ix), None)
-    acc = (k,v,o,lse,k_ix)
-    # We sadly have to manually unroll this because scan breaks the axis context preventing us from using ppermute (unroll=axis_size doesn't help either).
-    # Optimization barrier prevents instruction reordering so that ppermute and flash_mha execute concurrently.
-    for _ in range(axis_size):
-        acc, _ = f(acc, None)
-        acc = _optimization_barrier(acc)
-    (_,_,o,lse,_) = acc
-    # (_,_,o,lse), _ = jax.lax.scan(f,init,None,axis_size)
-    return o.astype(q.dtype), lse
-
-# ==== Ring Backward ===
-
-# This doesn't seem like the most efficient way to do this, kind of wasting compute by calculating every dq,dk,dv twice.
-# Should we send the accumulator for dk,dv cross-device instead? Relying on the fact that after a full cycle, they return to the starting device.
-def ring_bwd(softmax_scale, is_causal, axis_name, axis_size, do,q,k,v,o,lse):
-    [n,l,h,d] = q.shape
-
-    ix = jax.lax.axis_index(axis_name)
-
-    dq = jnp.zeros([n,l,h,d], jnp.float32)
-    dk = jnp.zeros([n,l,h,d], jnp.float32)
-    dv = jnp.zeros([n,l,h,d], jnp.float32)
-
-    # scan :: (c -> a -> (c, b)) -> c -> [a] -> (c, [b])
-    def f(acc, a):
-        (do2,q2,k2,v2,o2,lse2,ix2, dq,dk,dv) = acc
-
-        cmp = (ix2 < ix).astype(jnp.int32) + (ix2 <= ix).astype(jnp.int32) 
-        # 0: ix < ix2
-        # 1: ix = ix2
-        # 2: ix > ix2
-        if is_causal:
-            dqa = jax.lax.switch(cmp, [
-                                lambda q,k,v: jnp.zeros([n,l,h,d], q.dtype),
-                                lambda q,k,v: _flash_mha_bwd_hlo(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1))[0],
-                                lambda q,k,v: _flash_mha_bwd_hlo(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))[0],
-                            ], q, k, v)
-            dka,dva = jax.lax.switch(cmp, [
-                                lambda q,k,v: _flash_mha_bwd_hlo(do2,q2,k,v,o2,lse2, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))[1:],
-                                lambda q,k,v: _flash_mha_bwd_hlo(do2,q2,k,v,o2,lse2, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1))[1:],
-                                lambda q,k,v: (jnp.zeros([n,l,h,d], q.dtype),jnp.zeros([n,l,h,d], q.dtype)),
-                            ], q, k, v)
-        else:
-            dqa,_,_ = _flash_mha_bwd_hlo(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))
-            _,dka,dva = _flash_mha_bwd_hlo(do2,q2,k,v,o2,lse2, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))
-
-        dq += dqa
-        dk += dka
-        dv += dva
-
-        (do2,q2,k2,v2,o2,lse2,ix2) = jax.lax.ppermute((do2,q2,k2,v2,o2,lse2,ix2), axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
-
-        return ((do2,q2,k2,v2,o2,lse2,ix2, dq,dk,dv), None)
-    acc = (do,q,k,v,o,lse,ix,dq,dk,dv)
-    # Unrolled as above.
-    for _ in range(axis_size):
-        acc, _ = f(acc, None)
-        acc = _optimization_barrier(acc)
-    (do2,q2,k2,v2,o2,lse2,ix2, dq,dk,dv) = acc
-    return dq.astype(q.dtype),dk.astype(q.dtype),dv.astype(q.dtype)

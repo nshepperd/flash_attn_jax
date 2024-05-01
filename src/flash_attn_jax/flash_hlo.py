@@ -21,7 +21,7 @@ from jax.sharding import PositionalSharding
 from einops import rearrange
 import math
 
-import flash_attn_jax.flash_api as flash_api
+import flash_attn_jax_lib.flash_api as flash_api
 
 # ==== Register primitives ====
 

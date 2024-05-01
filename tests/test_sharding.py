@@ -1,8 +1,10 @@
 import glob
-import sys
+import sys, os
 
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
 if glob.glob('build/lib.linux-*'):
-    sys.path.append(glob.glob('build/lib.linux-*')[0])
+    sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
+sys.path.insert(0,'./src')
 
 import jax
 import jax.numpy as jnp
@@ -12,9 +14,9 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import PositionalSharding
 from jax.tree_util import tree_map
+jax.config.update("jax_traceback_filtering", "off")
 
 from flash_attn_jax import flash_mha
-
 
 def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1)):
     softmax_scale = 1/np.sqrt(q.shape[-1])
@@ -46,6 +48,7 @@ def check(ref_out, jax_out, out):
         assert jnp.max(jnp.abs(out - ref_out)).item() <= 3 * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
     tree_map(check1, ref_out, jax_out, out)
 
+@pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -56,8 +59,6 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
-    if len(devices) < 2:
-        devices *= 2
     n = len(devices)
 
     @jax.jit
@@ -75,13 +76,14 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
         hlo = flash.lower((q,k,v)).compile().as_text()
         return hlo
 
-    hlo = with_sharding(PositionalSharding(devices).reshape(n,1,1,1))
-    assert 'all-gather' not in hlo
-    assert 'dynamic-slice' not in hlo
+    with Mesh(np.array(devices), axis_names=('x',)) as mesh:
+        hlo = with_sharding(NamedSharding(mesh, P('x',None,None,None)))
+        assert 'all-gather' not in hlo
+        assert 'dynamic-slice' not in hlo
 
-    hlo = with_sharding(PositionalSharding(devices).reshape(1,1,n,1))
-    assert 'all-gather' not in hlo
-    assert 'dynamic-slice' not in hlo
+        hlo = with_sharding(NamedSharding(mesh, P(None,None,'x',None)))
+        assert 'all-gather' not in hlo
+        assert 'dynamic-slice' not in hlo
 
     if not local:
         with Mesh(np.array(devices), axis_names=('x',)) as mesh:
@@ -97,6 +99,7 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
             assert 'collective-permute-start collective-permute-done' not in collectives, hlo
 
 
+@pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -107,8 +110,6 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
-    if len(devices) < 2:
-        devices *= 2
     n = len(devices)
 
     @jax.jit

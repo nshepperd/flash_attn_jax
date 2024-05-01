@@ -106,7 +106,7 @@ if not SKIP_CUDA_BUILD:
     #         cc_flag.append("arch=compute_90,code=sm_90")
     ext_modules.append(
         CUDAExtension(
-            name="flash_attn_jax.flash_api",
+            name="flash_attn_jax_lib.flash_api",
             sources=[
                 "csrc/flash_attn/flash_api.cpp",
                 "csrc/flash_attn/flash_common.cpp",

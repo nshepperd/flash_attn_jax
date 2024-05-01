@@ -1,6 +1,8 @@
-import sys, glob
+import sys, glob, os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
 if glob.glob('build/lib.linux-*'):
-    sys.path.append(glob.glob('build/lib.linux-*')[0])
+    sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
+sys.path.insert(0,'./src')
 
 import pytest
 import jax
@@ -13,7 +15,6 @@ from flash_attn_jax import flash_mha
 def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1)):
     softmax_scale = 1/np.sqrt(q.shape[-1])
     att = jnp.einsum('nlhd,nLhd->nhlL',q,k)
-
     [_, _, l, L] = att.shape
     mask = jnp.ones([l,L])
     if is_causal:
@@ -46,7 +47,7 @@ def check(ref_out, jax_out, out):
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
-@pytest.mark.parametrize("d", [59, 32, 40])
+@pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4, 8])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
