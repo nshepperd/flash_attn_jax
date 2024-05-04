@@ -1,2 +1,5 @@
 [build-system]
 requires = ["setuptools", "wheel", "setuptools-cuda-cpp @ git+https://github.com/nshepperd/setuptools-cuda-cpp", "packaging", "pybind11"]
+
+[tool.cibuildwheel]
+manylinux-x86_64-image = "sameli/manylinux_2_28_x86_64_cuda_12.3"
