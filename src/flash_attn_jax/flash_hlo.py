@@ -77,16 +77,14 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
     v_type = ir.RankedTensorType(v.type)
     v_shape = v_type.shape
 
-    assert q_type.element_type == k_type.element_type
-    assert q_type.element_type == v_type.element_type
+    assert q_type.element_type == k_type.element_type, "Q and K must have the same dtype"
+    assert q_type.element_type == v_type.element_type, "Q and V must have the same dtype"
     element_type = q_type.element_type
-    assert type(element_type) in [ir.F16Type, ir.BF16Type]
+    assert type(element_type) in [ir.F16Type, ir.BF16Type], "Only support fp16 and bf16 data type"
     [n, l, h, d] = q_shape
     [nk, lk, hk, dk] = k_shape
-
-
-    assert k_shape == v_shape
-    assert [n, d] == [nk, dk]
+    assert k_shape == v_shape, "K and V must have the same shape"
+    assert [n, d] == [nk, dk], "Q and K must have the same batch size and head size"
 
     opaque = flash_api.make_flash_mha_fwd_args(
         0.0, # p_dropout
@@ -100,47 +98,39 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
         flash_api.BF16 if type(element_type) == ir.BF16Type else flash_api.FP16,
         0)
 
-    lse_type = ir.RankedTensorType.get([n, h, l], ir.F32Type.get(ctx.module_context.context))
-
-    if d % 8 != 0:
-        # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
-        dpad = 8 - d%8
-
-        z = np.array(0.0, dtype=ir_type_to_dtype(element_type))
-        z = mlir.ir_constant(z)
-        q_padded = mlir.hlo.PadOp(q,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        k_padded = mlir.hlo.PadOp(k,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-        v_padded = mlir.hlo.PadOp(v,z,[0,0,0,0],[0,0,0,dpad],[0,0,0,0]).result
-
+    def fwd(q, k, v):
+        dpad = (8 - d%8) % 8
+        if dpad > 0:
+            # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
+            q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+            v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        
         q_shape = [n, l, h, d+dpad]
         k_shape = [n, lk, hk, d+dpad]
         v_shape = [n, lk, hk, d+dpad]
         o_shape = [n, l, h, d+dpad]
+        lse_shape = [n, h, l]
 
+        
+        lse_type = ir.RankedTensorType.get([n, h, l], mlir.dtype_to_ir_type(jnp.float32.dtype))
         out_types = [ir.RankedTensorType.get(o_shape, element_type), lse_type]
+        operand_layouts = default_layouts(q_shape, k_shape, v_shape)
+        result_layouts = default_layouts(o_shape, lse_shape)
 
-        (o, lse) = mlir.custom_call(
-            b"flash_mha_fwd",
+        o, lse = custom_call(
+            q, k, v,
+            call_target_name = b"flash_mha_fwd",
             result_types=out_types,
-            operands=[q_padded, k_padded, v_padded],
             backend_config=opaque,
-            operand_layouts=default_layouts(q_shape, k_shape, v_shape),
-            result_layouts=default_layouts(*[o.shape for o in out_types]),
-        ).results
+            operand_layouts=operand_layouts,
+            result_layouts=result_layouts,
+        )
 
-        o = mlir.hlo.SliceOp(o, [0,0,0,0], (n, l, h, d), [1,1,1,1]).result
-        return (o,lse)
-    else:
-        out_types = [ir.RankedTensorType.get([n, l, h, d], element_type), lse_type]
-        out = mlir.custom_call(
-            b"flash_mha_fwd",
-            result_types=out_types,
-            operands=[q, k, v],
-            backend_config=opaque,
-            operand_layouts=default_layouts(q_shape, k_shape, v_shape),
-            result_layouts=default_layouts(*[o.shape for o in out_types]),
-        ).results
-        return out
+        if dpad > 0:
+            o = o[:,:,:,:d]
+        return o, lse
+    return mlir.lower_fun(fwd, multiple_results=True)(ctx, q, k, v)
 
 mlir.register_lowering(
     _flash_mha_fwd_hlo_p,
