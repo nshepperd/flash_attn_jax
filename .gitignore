@@ -32,3 +32,4 @@ var/
 venv
 .tup
 tup.config
+local
