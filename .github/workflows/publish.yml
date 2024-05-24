@@ -48,6 +48,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
       - name: Set CUDA and PyTorch versions
         run: |
           echo "MATRIX_CUDA_MAJOR=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
@@ -76,6 +81,7 @@ jobs:
 
       - name: Log Built Wheels
         run: |
+          python3 set_tag_in_wheels.py "+cu$MATRIX_CUDA_MAJOR" wheelhouse/*.whl
           ls wheelhouse
           wheel_name=$(basename wheelhouse/*.whl)
           echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
@@ -109,36 +115,41 @@ jobs:
           name: ${{env.wheel_name}}
           path: ./wheelhouse/${{env.wheel_name}}
 
-  # publish_package:
-  #   name: Publish package
-  #   needs: [build_wheels]
+  publish_package:
+    name: Publish package
+    needs: [build_wheels]
 
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     id-token: write
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
 
-  #   steps:
-  #     - uses: actions/checkout@v3
+    steps:
+      - uses: actions/checkout@v3
 
-  #     - uses: actions/setup-python@v4
-  #       with:
-  #         python-version: '3.10'
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-  #     - name: Install dependencies
-  #       run: |
-  #         pip install setuptools==68.0.0
-  #         pip install git+https://github.com/nshepperd/setuptools-cuda-cpp
-  #         pip install ninja packaging wheel pybind11
+      - name: Install dependencies
+        run: |
+          pip install setuptools==68.0.0
+          pip install git+https://github.com/nshepperd/setuptools-cuda-cpp
+          pip install ninja packaging wheel pybind11
 
-  #     - name: Build core package
-  #       run: |
-  #         CUDA_HOME=/ python setup.py sdist --dist-dir=dist
+      - name: Build core package
+        run: |
+          CUDA_HOME=/ python setup.py sdist --dist-dir=dist
 
-  #     - name: Retrieve release distributions
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         path: dist/
-  #         merge-multiple: true
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+          pattern: '*+cu12*.whl'
+        
+      - name: Remove version tag for pypi
+        run: |
+          python3 set_tag_in_wheels.py "" dist/*+cu12*.whl
 
-  #     - name: Publish release distributions to PyPI
-  #       uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

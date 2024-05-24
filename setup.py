@@ -76,8 +76,7 @@ def get_cuda_version():
     output = raw_output.split()
     release_idx = output.index("release") + 1
     version = output[release_idx].split(",")[0].split('.')[0] # should be 11 or 12
-    return f'+cu{version}'
-
+    return version
 
 def append_nvcc_threads(nvcc_extra_args):
     return nvcc_extra_args + ["--threads", "4"]
@@ -92,6 +91,8 @@ subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"])
 
 SKIP_CUDA_BUILD = False
 
+cuda12 = get_cuda_version() != "11"
+
 # CUDA_HOME = find_cuda_home()
 if not SKIP_CUDA_BUILD:
 
@@ -100,10 +101,9 @@ if not SKIP_CUDA_BUILD:
     # cc_flag.append("arch=compute_75,code=sm_75")
     cc_flag.append("-gencode")
     cc_flag.append("arch=compute_80,code=sm_80")
-    # if CUDA_HOME is not None:
-    #     if bare_metal_version >= Version("11.8"):
-    #         cc_flag.append("-gencode")
-    #         cc_flag.append("arch=compute_90,code=sm_90")
+    if cuda12:
+        cc_flag.append("-gencode")
+        cc_flag.append("arch=compute_90,code=sm_90")
     ext_modules.append(
         CUDAExtension(
             name="flash_attn_jax_lib.flash_api",
@@ -171,6 +171,7 @@ if not SKIP_CUDA_BUILD:
                         "-U__CUDA_NO_HALF_CONVERSIONS__",
                         "-U__CUDA_NO_HALF2_OPERATORS__",
                         "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+                        "-DFLASHATTENTION_DISABLE_DROPOUT=1",
                         "--expt-relaxed-constexpr",
                         "--expt-extended-lambda",
                         "--use_fast_math",
@@ -194,11 +195,7 @@ def get_package_version():
     with open(Path(this_dir) / "src" / "flash_attn_jax" / "__init__.py", "r") as f:
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     public_version = ast.literal_eval(version_match.group(1))
-    local_version = os.environ.get("FLASH_ATTN_LOCAL_VERSION")
-    if local_version:
-        return f"{public_version}+{local_version}{get_cuda_version()}"
-    else:
-        return f"{public_version}{get_cuda_version()}"
+    return public_version
 
 
 class NinjaBuildExtension(BuildExtension):
