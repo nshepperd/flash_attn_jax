@@ -229,7 +229,7 @@ setup(
     description="Flash Attention Jax",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/nshepperd/flash-attention-jax",
+    url="https://github.com/nshepperd/flash_attn_jax",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: BSD License",
