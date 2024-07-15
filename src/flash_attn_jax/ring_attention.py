@@ -22,9 +22,10 @@ from jax._src.ad_checkpoint import _optimization_barrier
 from einops import rearrange
 import math
 
+import flash_attn_jax_lib.flash_api as flash_api
 # ==== Ring Forward ====
 
-def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal=False):
+def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal=False, similarity=flash_api.softmax):
     [n,l,h,d] = q.shape
     if softmax_scale is None:
         softmax_scale = 1/math.sqrt(d)
@@ -45,11 +46,11 @@ def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal
             o2, lse2 = jax.lax.switch(cmp,
                                     [
                                         lambda: (jnp.zeros([n,l,h,d], q.dtype), jnp.full([n,h,l], float('-inf'), jnp.float32)),
-                                        lambda: mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1)),
-                                        lambda: mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1)),
+                                        lambda: mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1),similarity=similarity),
+                                        lambda: mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1),similarity=similarity),
                                     ])
         else:
-            o2, lse2 = mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))
+            o2, lse2 = mha_fwd(q,k,v, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1),similarity=similarity)
         o2 = o2.astype(jnp.float32)
 
         mx = jnp.maximum(lse1,lse2)
@@ -77,7 +78,7 @@ def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal
 
 # ==== Ring Backward ===
 
-def ring_bwd(do,q,k,v,o,lse, axis_name, axis_size, mha_bwd, softmax_scale=None, is_causal=False):
+def ring_bwd(do,q,k,v,o,lse, axis_name, axis_size, mha_bwd, softmax_scale=None, is_causal=False, similarity=flash_api.softmax):
     [n,l,h,d] = q.shape
     [n,lk,hk,d] = k.shape
     if softmax_scale is None:
@@ -100,9 +101,9 @@ def ring_bwd(do,q,k,v,o,lse, axis_name, axis_size, mha_bwd, softmax_scale=None, 
         def skip():
             return (jnp.zeros(q.shape, q.dtype), jnp.zeros(k.shape, k.dtype), jnp.zeros(v.shape, v.dtype))
         def causal():
-            return mha_bwd(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1))
+            return mha_bwd(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=True, window_size=(-1,-1), similarity=similarity)
         def non_causal():
-            return mha_bwd(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1))
+            return mha_bwd(do,q,k2,v2,o,lse, softmax_scale=softmax_scale, is_causal=False, window_size=(-1,-1), similarity=similarity)
 
         (dk2_,dv2_) = jax.lax.ppermute((dk2,dv2), axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
         (k2_,v2_,ix2_) = jax.lax.ppermute((k2,v2,ix2), axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])

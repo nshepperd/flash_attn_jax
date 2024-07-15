@@ -6,7 +6,6 @@
 #include <pybind11/pybind11.h>
 
 #include "flash_common.h"
-#include "similarity.h"
 
 struct mha_bwd_args {
 	float p_dropout;
@@ -20,7 +19,7 @@ struct mha_bwd_args {
 
 	ElementType dtype;
 	uint64_t seed;
-	flash::SimilarityType simtype;
+	SimilarityType similarity_type;
 };
 
 void mha_bwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_len);

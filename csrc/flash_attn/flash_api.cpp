@@ -317,8 +317,9 @@ pybind11::bytes make_mha_fwd_args(	float p_dropout,
 									int n, int l, int h, int d,
 									int l_k, int h_k,
 									ElementType dtype,
-									uint64_t seed) {
-	return PackDescriptor(mha_fwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, return_softmax, n, l, h, d, l_k, h_k, dtype, seed});
+									uint64_t seed,
+									SimilarityType similarity_type) {
+	return PackDescriptor(mha_fwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, return_softmax, n, l, h, d, l_k, h_k, dtype, seed, similarity_type});
 }
 
 pybind11::bytes make_mha_bwd_args(	float p_dropout,
@@ -330,8 +331,9 @@ pybind11::bytes make_mha_bwd_args(	float p_dropout,
 									int n, int l, int h, int d,
 									int l_k, int h_k,
 									ElementType dtype,
-									uint64_t seed) {
-	return PackDescriptor(mha_bwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, deterministic, n, l, h, d, l_k, h_k, dtype, seed});
+									uint64_t seed,
+									SimilarityType similarity_type) {
+	return PackDescriptor(mha_bwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, deterministic, n, l, h, d, l_k, h_k, dtype, seed, similarity_type});
 }
 
 pybind11::dict Registrations() {
@@ -350,6 +352,10 @@ PYBIND11_MODULE(flash_api, m) {
 	pybind11::enum_<ElementType>(m, "ElementType")
 		.value("BF16", BF16)
 		.value("FP16", FP16)
+		.export_values();
+	pybind11::enum_<SimilarityType>(m, "SimilarityType")
+		.value("sympower", sympower)
+		.value("softmax", softmax)
 		.export_values();
 
     // m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");

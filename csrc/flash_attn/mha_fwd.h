@@ -18,6 +18,7 @@ struct mha_fwd_args {
 	int l_k, h_k;
 	ElementType dtype;
 	uint64_t seed;
+	SimilarityType similarity_type;
 };
 
 void mha_fwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_len);

@@ -13,11 +13,10 @@
 #include "block_info.h"
 #include "kernel_traits.h"
 #include "utils.h"
-#include "softmax.h"
+#include "similarity.h"
 #include "mask.h"
 #include "dropout.h"
 #include "rotary.h"
-#include "similarity.h"
 
 namespace flash {
 

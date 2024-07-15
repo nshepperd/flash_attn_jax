@@ -12,6 +12,11 @@
 
 enum ElementType { BF16, FP16, FP32 };
 
+enum SimilarityType {
+    sympower,
+    softmax
+};
+
 void set_params_fprop(Flash_fwd_params &params,
 					  ElementType element_type,
                       // sizes

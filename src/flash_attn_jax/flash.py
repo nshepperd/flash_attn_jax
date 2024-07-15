@@ -21,6 +21,7 @@ from jax.sharding import PositionalSharding
 from einops import rearrange
 import einops
 import math
+import flash_attn_jax_lib.flash_api as flash_api
 
 from .flash_sharding import _flash_mha_fwd_hlo_sharded, _flash_mha_bwd_hlo_sharded
 
@@ -47,13 +48,20 @@ try:
 except Exception as e:
     pass
 
+# ==== Supported Similarities ====
+similarities = [flash_api.softmax, flash_api.sympower]
+
+def _check_similarity(similarity):
+    if similarity not in similarities:
+        raise ValueError(f"Similarity {similarity} not supported. Must be one of {similarities}")
+
 # ==== Primitive frontends ====
 
-def _flash_mha_fwd(q,k,v, softmax_scale, is_causal, window_size):
-    return tuple(_flash_mha_fwd_p.bind(q,k,v, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
+def _flash_mha_fwd(q,k,v, softmax_scale, is_causal, window_size, similarity):
+    return tuple(_flash_mha_fwd_p.bind(q,k,v, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size, similarity=similarity))
 
-def _flash_mha_bwd(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size):
-    return tuple(_flash_mha_bwd_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
+def _flash_mha_bwd(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size, similarity):
+    return tuple(_flash_mha_bwd_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size, similarity=similarity))
 
 # ==== HLO lowering ====
 
@@ -218,7 +226,7 @@ class _flash_mha_vjp:
 
 # ==== Frontend ====
 
-def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
+def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1), similarity=flash_api.softmax):
     """Flash attention.
 
     softmax_scale defaults to 1/sqrt(d) and must be a python float if
@@ -228,9 +236,10 @@ def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
     assert len(q.shape) == 4
     assert len(k.shape) == 4
     assert len(v.shape) == 4
+    _check_similarity(similarity)
 
     if softmax_scale is None:
         softmax_scale = 1/math.sqrt(q.shape[-1])
     assert type(softmax_scale) is float
-    o = _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
+    o = _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size, similarity=similarity))
     return o
