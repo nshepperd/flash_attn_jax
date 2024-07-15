@@ -17,6 +17,7 @@
 #include "mask.h"
 #include "dropout.h"
 #include "rotary.h"
+#include "similarity.h"
 
 namespace flash {
 
