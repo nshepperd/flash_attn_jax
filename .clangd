@@ -1,0 +1,16 @@
+CompileFlags:
+  Remove:
+   - --expt-relaxed-constexpr
+   - --compiler-options
+   - --expt-extended-lambda
+   - --use_fast_math
+   - --threads
+   - -gencode
+  Add:
+    - --no-cuda-version-check
+---
+If:
+  PathMatch: .*\.cu
+CompileFlags:
+  Add:
+    - "--cuda-gpu-arch=sm_80"

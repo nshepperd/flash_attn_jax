@@ -30,6 +30,8 @@ var/
 
 # Dev
 venv
+env
 .tup
 tup.config
 local
+compile_commands.json

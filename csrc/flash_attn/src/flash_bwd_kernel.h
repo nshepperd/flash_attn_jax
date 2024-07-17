@@ -11,7 +11,7 @@
 #include <cutlass/numeric_types.h>
 
 #include "block_info.h"
-#include "kernel_traits.h"
+#include "flash_bwd_preprocess_kernel.h"
 #include "utils.h"
 #include "softmax.h"
 #include "mask.h"

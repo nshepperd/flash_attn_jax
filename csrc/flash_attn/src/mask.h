@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "utils.h"
 #include <cute/tensor.hpp>
 
 namespace flash {

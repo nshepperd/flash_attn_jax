@@ -1,11 +1,11 @@
+#pragma once
+
 #include <cmath>
 
 #include <cute/tensor.hpp>
 
 #include <cutlass/cutlass.h>
 #include <cutlass/array.h>
-
-#include "utils.h"
 
 namespace flash {
 

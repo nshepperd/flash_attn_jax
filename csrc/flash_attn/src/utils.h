@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "cute/tensor.hpp"
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -25,6 +26,9 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace flash {
+
+using cute::_;
+using cute::_0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -139,18 +143,18 @@ __forceinline__ __device__ void gemm(Tensor0 &acc, Tensor1 &tCrA, Tensor2 &tCrB,
                             Tensor4 const& tCsB, TiledMma tiled_mma,
                             TiledCopyA smem_tiled_copy_A, TiledCopyB smem_tiled_copy_B,
                             ThrCopyA smem_thr_copy_A, ThrCopyB smem_thr_copy_B) {
-    CUTE_STATIC_ASSERT_V(size<1>(tCrA) == size<1>(acc));                     // MMA_M
-    CUTE_STATIC_ASSERT_V(size<1>(tCrB) == size<2>(acc));                     // MMA_N
-    CUTE_STATIC_ASSERT_V(size<2>(tCrA) == size<2>(tCrB));                     // MMA_K
-    Tensor tCrA_copy_view = smem_thr_copy_A.retile_D(tCrA);
-    CUTE_STATIC_ASSERT_V(size<1>(tCsA) == size<1>(tCrA_copy_view));            // M
-    Tensor tCrB_copy_view = smem_thr_copy_B.retile_D(tCrB);
-    CUTE_STATIC_ASSERT_V(size<1>(tCsB) == size<1>(tCrB_copy_view));            // N
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCrA) == cute::size<1>(acc));                     // MMA_M
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCrB) == cute::size<2>(acc));                     // MMA_N
+    CUTE_STATIC_ASSERT_V(cute::size<2>(tCrA) == cute::size<2>(tCrB));                     // MMA_K
+    cute::Tensor tCrA_copy_view = smem_thr_copy_A.retile_D(tCrA);
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCsA) == cute::size<1>(tCrA_copy_view));            // M
+    cute::Tensor tCrB_copy_view = smem_thr_copy_B.retile_D(tCrB);
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCsB) == cute::size<1>(tCrB_copy_view));            // N
     if (!A_in_regs) { cute::copy(smem_tiled_copy_A, tCsA(_, _, _0{}), tCrA_copy_view(_, _, _0{})); }
     if (!B_in_regs) { cute::copy(smem_tiled_copy_B, tCsB(_, _, _0{}), tCrB_copy_view(_, _, _0{})); }
     #pragma unroll
-    for (int i = 0; i < size<2>(tCrA); ++i) {
-        if (i < size<2>(tCrA) - 1) {
+    for (int i = 0; i < cute::size<2>(tCrA); ++i) {
+        if (i < cute::size<2>(tCrA) - 1) {
             if (!A_in_regs) { cute::copy(smem_tiled_copy_A, tCsA(_, _, i + 1), tCrA_copy_view(_, _, i + 1)); }
             if (!B_in_regs) { cute::copy(smem_tiled_copy_B, tCsB(_, _, i + 1), tCrB_copy_view(_, _, i + 1)); }
         }
@@ -165,15 +169,15 @@ template<typename Tensor0, typename Tensor1, typename Tensor2, typename Tensor3,
 __forceinline__ __device__ void gemm_rs(Tensor0 &acc, Tensor1 &tCrA, Tensor2 &tCrB, Tensor3 const& tCsB,
                                TiledMma tiled_mma, TiledCopy smem_tiled_copy_B,
                                ThrCopy smem_thr_copy_B) {
-    CUTE_STATIC_ASSERT_V(size<1>(tCrA) == size<1>(acc));                     // MMA_M
-    CUTE_STATIC_ASSERT_V(size<1>(tCrB) == size<2>(acc));                     // MMA_N
-    CUTE_STATIC_ASSERT_V(size<2>(tCrA) == size<2>(tCrB));                     // MMA_K
-    Tensor tCrB_copy_view = smem_thr_copy_B.retile_D(tCrB);
-    CUTE_STATIC_ASSERT_V(size<1>(tCsB) == size<1>(tCrB_copy_view));            // N
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCrA) == cute::size<1>(acc));                     // MMA_M
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCrB) == cute::size<2>(acc));                     // MMA_N
+    CUTE_STATIC_ASSERT_V(cute::size<2>(tCrA) == cute::size<2>(tCrB));                     // MMA_K
+    cute::Tensor tCrB_copy_view = smem_thr_copy_B.retile_D(tCrB);
+    CUTE_STATIC_ASSERT_V(cute::size<1>(tCsB) == cute::size<1>(tCrB_copy_view));            // N
     cute::copy(smem_tiled_copy_B, tCsB(_, _, _0{}), tCrB_copy_view(_, _, _0{}));
     #pragma unroll
-    for (int i = 0; i < size<2>(tCrA); ++i) {
-        if (i < size<2>(tCrA) - 1) {
+    for (int i = 0; i < cute::size<2>(tCrA); ++i) {
+        if (i < cute::size<2>(tCrA) - 1) {
             cute::copy(smem_tiled_copy_B, tCsB(_, _, i + 1), tCrB_copy_view(_, _, i + 1));
         }
         cute::gemm(tiled_mma, tCrA(_, _, i), tCrB(_, _, i), acc);
@@ -185,10 +189,10 @@ __forceinline__ __device__ void gemm_rs(Tensor0 &acc, Tensor1 &tCrA, Tensor2 &tC
 // Convert acc_layout from (MMA=4, MMA_M, MMA_N) to (nrow=(2, MMA_M), ncol=(2, MMA_N))
 template<typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_rowcol(Layout acc_layout) {
-    static_assert(decltype(size<0>(acc_layout))::value == 4);
-    static_assert(decltype(rank(acc_layout))::value == 3);
-    auto l = logical_divide(acc_layout, Shape<_2>{});  // ((2, 2), MMA_M, MMA_N)
-    return make_layout(make_layout(get<0, 1>(l), get<1>(l)), make_layout(get<0, 0>(l), get<2>(l)));
+    static_assert(decltype(cute::size<0>(acc_layout))::value == 4);
+    static_assert(decltype(cute::rank(acc_layout))::value == 3);
+    auto l = cute::logical_divide(acc_layout, cute::Shape<cute::_2>{});  // ((2, 2), MMA_M, MMA_N)
+    return cute::make_layout(cute::make_layout(cute::get<0, 1>(l), cute::get<1>(l)), cute::make_layout(cute::get<0, 0>(l), cute::get<2>(l)));
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -197,16 +201,16 @@ __forceinline__ __device__ auto convert_layout_acc_rowcol(Layout acc_layout) {
 // if using m16n8k16, or to (4, MMA_M, MMA_N) if using m16n8k8.
 template<typename MMA_traits, typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_Aregs(Layout acc_layout) {
-    using X = Underscore;
-    static_assert(decltype(size<0>(acc_layout))::value == 4);
-    static_assert(decltype(rank(acc_layout))::value == 3);
-    constexpr int mma_shape_K = get<2>(typename MMA_traits::Shape_MNK{});
+    using X = cute::Underscore;
+    static_assert(decltype(cute::size<0>(acc_layout))::value == 4);
+    static_assert(decltype(cute::rank(acc_layout))::value == 3);
+    constexpr int mma_shape_K = cute::get<2>(typename MMA_traits::Shape_MNK{});
     static_assert(mma_shape_K == 8 || mma_shape_K == 16);
     if constexpr (mma_shape_K == 8) {
         return acc_layout;
     } else {
-        auto l = logical_divide(acc_layout, Shape<X, X, _2>{});  // (4, MMA_M, (2, MMA_N / 2)))
-        return make_layout(make_layout(get<0>(l), get<2, 0>(l)), get<1>(l), get<2, 1>(l));
+        auto l = cute::logical_divide(acc_layout, cute::Shape<X, X, cute::_2>{});  // (4, MMA_M, (2, MMA_N / 2)))
+        return cute::make_layout(cute::make_layout(cute::get<0>(l), cute::get<2, 0>(l)), cute::get<1>(l), cute::get<2, 1>(l));
     }
 };
 
@@ -215,36 +219,36 @@ __forceinline__ __device__ auto convert_layout_acc_Aregs(Layout acc_layout) {
 // Convert acc_layout from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
 template<typename Layout>
 __forceinline__ __device__ auto convert_layout_acc_dropout(Layout acc_layout) {
-    using X = Underscore;
-    static_assert(decltype(size<0>(acc_layout))::value == 4);
-    static_assert(decltype(rank(acc_layout))::value == 3);
-    auto l = logical_divide(acc_layout, Shape<X, X, _2>{});  // (4, MMA_M, (2, MMA_N / 2)))
-    return make_layout(make_layout(get<0>(l), get<2, 0>(l)), get<1>(l), get<2, 1>(l));
+    using X = cute::Underscore;
+    static_assert(decltype(cute::size<0>(acc_layout))::value == 4);
+    static_assert(decltype(cute::rank(acc_layout))::value == 3);
+    auto l = cute::logical_divide(acc_layout, cute::Shape<X, X, cute::_2>{});  // (4, MMA_M, (2, MMA_N / 2)))
+    return cute::make_layout(cute::make_layout(cute::get<0>(l), cute::get<2, 0>(l)), cute::get<1>(l), cute::get<2, 1>(l));
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename To_type, typename Engine, typename Layout>
-__forceinline__ __device__ auto convert_type(Tensor<Engine, Layout> const &tensor) {
+__forceinline__ __device__ auto convert_type(cute::Tensor<Engine, Layout> const &tensor) {
     using From_type = typename Engine::value_type;
-    constexpr int numel = decltype(size(tensor))::value;
+    constexpr int numel = decltype(cute::size(tensor))::value;
     cutlass::NumericArrayConverter<To_type, From_type, numel> convert_op;
     // HACK: this requires tensor to be "contiguous"
     auto frag = convert_op(*reinterpret_cast<const cutlass::Array<From_type, numel> *>(tensor.data()));
-    return make_tensor(make_rmem_ptr<To_type>(&frag), tensor.layout());
+    return cute::make_tensor(cute::make_rmem_ptr<To_type>(&frag), tensor.layout());
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename Engine, typename Layout>
-__forceinline__ __device__ void relu_(Tensor<Engine, Layout> &tensor) {
-    constexpr int numel = decltype(size(tensor))::value;
+__forceinline__ __device__ void relu_(cute::Tensor<Engine, Layout> &tensor) {
+    constexpr int numel = decltype(cute::size(tensor))::value;
     static_assert(numel % 2 == 0);
     using value_t = typename Engine::value_type;
     // HACK: this requires tensor to be "contiguous"
-    Tensor tensor_uint32 = recast<uint32_t>(tensor);
+    cute::Tensor tensor_uint32 = cute::recast<uint32_t>(tensor);
     #pragma unroll
-    for (int i = 0; i < size(tensor_uint32); ++i) {
+    for (int i = 0; i < cute::size(tensor_uint32); ++i) {
         tensor_uint32(i) = relu2<value_t>(tensor_uint32(i));
     }
 }
@@ -253,23 +257,23 @@ __forceinline__ __device__ void relu_(Tensor<Engine, Layout> &tensor) {
 
 // On SM80 and above, we can fuse fp32 -> fp16/bf16 conversion and relu into 1 instruction
 template <typename To_type, typename Engine, typename Layout>
-__forceinline__ __device__ auto convert_type_relu(Tensor<Engine, Layout> const &tensor) {
+__forceinline__ __device__ auto convert_type_relu(cute::Tensor<Engine, Layout> const &tensor) {
     using From_type = typename Engine::value_type;
     static_assert(std::is_same_v<To_type, cutlass::half_t> || std::is_same_v<To_type, cutlass::bfloat16_t>);
     static_assert(std::is_same_v<float, From_type>);
-    constexpr int numel = decltype(size(tensor))::value;
+    constexpr int numel = decltype(cute::size(tensor))::value;
     static_assert(numel % 2 == 0);
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     // HACK: this requires tensor to be "contiguous"
     Tensor tensor_float2 = recast<float2>(tensor);
     Tensor out_uint32 = make_tensor<uint32_t>(tensor_float2.layout());
     #pragma unroll
-    for (int i = 0; i < size(out_uint32); ++i) {
+    for (int i = 0; i < cute::size(out_uint32); ++i) {
         out_uint32(i) = convert_relu2<To_type>(tensor_float2(i));
     }
     Tensor out = make_tensor(make_rmem_ptr<To_type>(out_uint32.data()), tensor.layout());
 #else
-    Tensor out = flash::convert_type<To_type>(tensor);
+    cute::Tensor out = flash::convert_type<To_type>(tensor);
     flash::relu_(out);
 #endif
     return out;
@@ -295,21 +299,21 @@ void cp_async_wait() {
 template <bool Is_even_MN=true, bool Is_even_K=true, bool Clear_OOB_MN=false, bool Clear_OOB_K=true,
           typename TiledCopy, typename Engine0, typename Layout0, typename Engine1, typename Layout1,
           typename Engine2, typename Layout2, typename Engine3, typename Layout3>
-__forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layout0> const &S,
-                            Tensor<Engine1, Layout1> &D, Tensor<Engine2, Layout2> const &identity_MN,
-                            Tensor<Engine3, Layout3> const &predicate_K, const int max_MN=0) {
-    CUTE_STATIC_ASSERT_V(rank(S) == Int<3>{});
-    CUTE_STATIC_ASSERT_V(rank(D) == Int<3>{});
-    CUTE_STATIC_ASSERT_V(size<0>(S) == size<0>(D));                     // MMA
-    CUTE_STATIC_ASSERT_V(size<1>(S) == size<1>(D));                     // MMA_M
-    CUTE_STATIC_ASSERT_V(size<2>(S) == size<2>(D));                     // MMA_K
+__forceinline__ __device__ void copy(TiledCopy tiled_copy, cute::Tensor<Engine0, Layout0> const &S,
+                            cute::Tensor<Engine1, Layout1> &D, cute::Tensor<Engine2, Layout2> const &identity_MN,
+                            cute::Tensor<Engine3, Layout3> const &predicate_K, const int max_MN=0) {
+    CUTE_STATIC_ASSERT_V(cute::rank(S) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(cute::rank(D) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(cute::size<0>(S) == cute::size<0>(D));                     // MMA
+    CUTE_STATIC_ASSERT_V(cute::size<1>(S) == cute::size<1>(D));                     // MMA_M
+    CUTE_STATIC_ASSERT_V(cute::size<2>(S) == cute::size<2>(D));                     // MMA_K
     // There's no case where !Clear_OOB_K && Clear_OOB_MN
     static_assert(!(Clear_OOB_MN && !Clear_OOB_K));
     #pragma unroll
-    for (int m = 0; m < size<1>(S); ++m) {
-        if (Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN) {
+    for (int m = 0; m < cute::size<1>(S); ++m) {
+        if (Is_even_MN || cute::get<0>(identity_MN(0, m, 0)) < max_MN) {
             #pragma unroll
-            for (int k = 0; k < size<2>(S); ++k) {
+            for (int k = 0; k < cute::size<2>(S); ++k) {
                 if (Is_even_K || predicate_K(k)) {
                     cute::copy(tiled_copy, S(_, m, k), D(_, m, k));
                 } else if (Clear_OOB_K) {
@@ -324,8 +328,8 @@ __forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layou
     // I think it's because the copies are under an if statement.
     // if (Is_even_K) {
     //     #pragma unroll
-    //     for (int m = 0; m < size<1>(S); ++m) {
-    //         if (Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN) {
+    //     for (int m = 0; m < cute::size<1>(S); ++m) {
+    //         if (Is_even_MN || cute::get<0>(identity_MN(0, m, 0)) < max_MN) {
     //             copy(tiled_copy, S(_, m, _), D(_, m, _));
     //         } else if (Clear_OOB_MN) {
     //             clear(D(_, m, _));
@@ -333,11 +337,11 @@ __forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layou
     //     }
     // } else {  // It's slightly faster in this case if iterate over K first
     //     #pragma unroll
-    //     for (int k = 0; k < size<2>(S); ++k) {
+    //     for (int k = 0; k < cute::size<2>(S); ++k) {
     //         if (predicate_K(k)) {
     //             #pragma unroll
-    //             for (int m = 0; m < size<1>(S); ++m) {
-    //                 if (Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN) {
+    //             for (int m = 0; m < cute::size<1>(S); ++m) {
+    //                 if (Is_even_MN || cute::get<0>(identity_MN(0, m, 0)) < max_MN) {
     //                     copy(tiled_copy, S(_, m, k), D(_, m, k));
     //                 } else if (Clear_OOB_MN) {
     //                     clear(D(_, m, k));
@@ -348,8 +352,8 @@ __forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layou
     //                 clear(D(_, _, k));
     //             } else {
     //                 #pragma unroll
-    //                 for (int m = 0; m < size<1>(S); ++m) {
-    //                     if (!(Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN)) {
+    //                 for (int m = 0; m < cute::size<1>(S); ++m) {
+    //                     if (!(Is_even_MN || cute::get<0>(identity_MN(0, m, 0)) < max_MN)) {
     //                         clear(D(_, m, k));
     //                     }
     //                 }
@@ -364,23 +368,23 @@ __forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layou
 template <bool Is_even_K=true,
           typename Engine0, typename Layout0, typename Engine1, typename Layout1,
           typename Engine2, typename Layout2, typename Engine3, typename Layout3>
-__forceinline__ __device__ void copy_w_min_idx(Tensor<Engine0, Layout0> const &S,
-                                      Tensor<Engine1, Layout1> &D, Tensor<Engine2, Layout2> const &identity_MN,
-                                      Tensor<Engine3, Layout3> const &predicate_K,
+__forceinline__ __device__ void copy_w_min_idx(cute::Tensor<Engine0, Layout0> const &S,
+                                      cute::Tensor<Engine1, Layout1> &D, cute::Tensor<Engine2, Layout2> const &identity_MN,
+                                      cute::Tensor<Engine3, Layout3> const &predicate_K,
                                       const int max_MN=0, const int min_MN=0) {
-    CUTE_STATIC_ASSERT_V(rank(S) == Int<3>{});
-    CUTE_STATIC_ASSERT_V(rank(D) == Int<3>{});
-    CUTE_STATIC_ASSERT_V(size<0>(S) == size<0>(D));                     // MMA
-    CUTE_STATIC_ASSERT_V(size<1>(S) == size<1>(D));                     // MMA_M
-    CUTE_STATIC_ASSERT_V(size<2>(S) == size<2>(D));                     // MMA_K
+    CUTE_STATIC_ASSERT_V(cute::rank(S) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(cute::rank(D) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(cute::size<0>(S) == cute::size<0>(D));                     // MMA
+    CUTE_STATIC_ASSERT_V(cute::size<1>(S) == cute::size<1>(D));                     // MMA_M
+    CUTE_STATIC_ASSERT_V(cute::size<2>(S) == cute::size<2>(D));                     // MMA_K
     // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("blockIdx.y = %d, max_MN = %d, min_MN = %d\n", blockIdx.y, max_MN, min_MN); }
     #pragma unroll
-    for (int m = 0; m < size<1>(S); ++m) {
-        // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("blockIdx.y = %d, m = %d\n", blockIdx.y, get<0>(identity_MN(0, m, 0))); }
-        if (get<0>(identity_MN(0, m, 0)) >= min_MN && get<0>(identity_MN(0, m, 0)) < max_MN) {
-            // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("Inner loop, blockIdx.y = %d, m = %d\n", blockIdx.y, get<0>(identity_MN(0, m, 0))); }
+    for (int m = 0; m < cute::size<1>(S); ++m) {
+        // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("blockIdx.y = %d, m = %d\n", blockIdx.y, cute::get<0>(identity_MN(0, m, 0))); }
+        if (cute::get<0>(identity_MN(0, m, 0)) >= min_MN && cute::get<0>(identity_MN(0, m, 0)) < max_MN) {
+            // if (threadIdx.x == 0 && blockIdx.z == 0) { printf("Inner loop, blockIdx.y = %d, m = %d\n", blockIdx.y, cute::get<0>(identity_MN(0, m, 0))); }
             #pragma unroll
-            for (int k = 0; k < size<2>(S); ++k) {
+            for (int k = 0; k < cute::size<2>(S); ++k) {
                 if (Is_even_K || predicate_K(k)) {
                     cute::copy(S(_, m, k), D(_, m, k));
                 }
