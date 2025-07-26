@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include "cute/algorithm/copy.hpp"
-
-#include "cutlass/cutlass.h"
-#include "cutlass/layout/layout.h"
-#include <cutlass/numeric_types.h>
+#include "cute/tensor.hpp"
+#include "cute/atom/mma_atom.hpp"
+#include "cute/atom/copy_atom.hpp"
 
 using namespace cute;
 

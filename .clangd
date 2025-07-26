@@ -6,6 +6,9 @@ CompileFlags:
    - --use_fast_math
    - --threads
    - -gencode
+   - -forward-unknown-to-host-compiler
+   - --generate-code=*
+   - -Xcompiler=*
   Add:
     - --no-cuda-version-check
 ---
