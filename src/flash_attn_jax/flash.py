@@ -8,15 +8,7 @@ from jax.core import ShapedArray
 from jax.interpreters import batching
 from jax.interpreters import mlir
 from jax.interpreters import xla
-from jax.interpreters.mlir import ir
-from jax.lib import xla_client
-from jaxlib.hlo_helpers import custom_call
-from jax.experimental.custom_partitioning import custom_partitioning
 from jax.extend.core import Primitive
-
-from jax.sharding import PartitionSpec as P
-from jax.sharding import Mesh
-from jax.sharding import NamedSharding
 
 from einops import rearrange
 import einops
@@ -206,11 +198,14 @@ def custom_vjp(cls, nondiff_argnums=()):
 # bwd.
 @partial(custom_vjp, nondiff_argnums=(3,))
 class _flash_mha_vjp:
+    @staticmethod
     def base(q,k,v,config):
         return _flash_mha_fwd(q,k,v, **config)[0]
+    @staticmethod
     def fwd(q,k,v,config):
         out, lse = _flash_mha_fwd(q,k,v, **config)
         return out, (q,k,v,out,lse)
+    @staticmethod
     def bwd(config, pack, dout):
         (q,k,v,out,lse) = pack
         dq, dk, dv = _flash_mha_bwd(dout, q, k, v, out, lse, **config)

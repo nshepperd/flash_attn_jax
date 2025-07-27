@@ -5,14 +5,7 @@ from typing import List
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import core, dtypes
-from jax.core import ShapedArray
-from jax.interpreters import batching
-from jax.interpreters import mlir
-from jax.interpreters import xla
 from jax.interpreters.mlir import ir
-from jax.lib import xla_client
-from jaxlib.hlo_helpers import custom_call
 from jax.experimental.custom_partitioning import custom_partitioning, SdyShardingRule, ArrayMapping, CompoundFactor
 
 from jax.sharding import PartitionSpec as P
@@ -35,9 +28,9 @@ def is_replicated(sharding):
         return sharding.is_fully_replicated
     raise ValueError(f"Unsupported sharding type: {type(sharding)}")
 
-def partition_fwd(softmax_scale, is_causal, window_size, 
-                  mesh: Mesh, 
-                  arg_shapes: List[jax.ShapeDtypeStruct], 
+def partition_fwd(softmax_scale, is_causal, window_size,
+                  mesh: Mesh,
+                  arg_shapes: List[jax.ShapeDtypeStruct],
                   result_shape: List[jax.ShapeDtypeStruct]):
     result_shardings = [x.sharding for x in result_shape],
     arg_shardings = [x.sharding for x in arg_shapes]

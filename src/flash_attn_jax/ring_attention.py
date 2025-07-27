@@ -3,15 +3,6 @@ from functools import partial, wraps
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import core, dtypes
-from jax.core import ShapedArray
-from jax.interpreters import batching
-from jax.interpreters import mlir
-from jax.interpreters import xla
-from jax.interpreters.mlir import ir
-from jax.lib import xla_client
-from jaxlib.hlo_helpers import custom_call
-from jax.experimental.custom_partitioning import custom_partitioning
 
 from einops import rearrange
 import math

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Install CUDA on manylinux docker image.
 set -eux
 
 VER=${1:-12.8}
