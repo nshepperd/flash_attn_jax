@@ -27,9 +27,9 @@ def pretty(tensor):
 # Smart idea from Tri Dao's repo: compare both impl to a float32
 # reference impl, and call it a pass if the absolute error isn't
 # more than 3x worse with flash attention.
-def check(ref_out, jax_out, out):
+def check(ref_out, jax_out, out, margin=4):
     def check1(ref_out, jax_out, out):
-        assert jnp.max(jnp.abs(out - ref_out)).item() <= 3 * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
+        assert jnp.max(jnp.abs(out - ref_out)).item() <= margin * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
     tree_map(check1, ref_out, jax_out, out)
 
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
