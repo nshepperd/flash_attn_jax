@@ -12,11 +12,11 @@ from jax.interpreters.mlir import ir
 from jax.lib import xla_client
 from jaxlib.hlo_helpers import custom_call
 from jax.experimental.custom_partitioning import custom_partitioning
+from jax.extend.core import Primitive
 
 from jax.sharding import PartitionSpec as P
 from jax.sharding import Mesh
 from jax.sharding import NamedSharding
-from jax.sharding import PositionalSharding
 
 from einops import rearrange
 import einops
@@ -31,11 +31,11 @@ from .flash_sharding import _flash_mha_fwd_hlo_sharded, _flash_mha_bwd_hlo_shard
 # about sharding or padding, which will be handled when they are
 # lowered to hlo, using the physical "hlo" primitives, which directly
 # lower to XLA CustomCall.
-_flash_mha_fwd_p = core.Primitive("flash_mha_fwd")
+_flash_mha_fwd_p = Primitive("flash_mha_fwd")
 _flash_mha_fwd_p.multiple_results = True
 _flash_mha_fwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_fwd_p))
 
-_flash_mha_bwd_p = core.Primitive("flash_mha_bwd")
+_flash_mha_bwd_p = Primitive("flash_mha_bwd")
 _flash_mha_bwd_p.multiple_results = True
 _flash_mha_bwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_bwd_p))
 
@@ -79,7 +79,7 @@ def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None, is_causal=None, window_
     assert q_dtype == k_dtype and q_dtype == v_dtype
     assert q_dtype in [jnp.bfloat16, jnp.float16]
     return (
-        ShapedArray(q.shape, q_dtype, named_shape=q.named_shape),
+        ShapedArray(q.shape, q_dtype),
         ShapedArray([n, h, l], jnp.float32)
     )
 _flash_mha_fwd_p.def_abstract_eval(_flash_mha_fwd_abstract)
@@ -96,9 +96,9 @@ def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, is_caus
     assert len(set([dout_dtype, q_dtype, k_dtype, v_dtype, out_dtype])) == 1
     assert q_dtype in [jnp.bfloat16, jnp.float16]
     return (
-        ShapedArray(q.shape, q_dtype, named_shape=q.named_shape),
-        ShapedArray(k.shape, k_dtype, named_shape=k.named_shape),
-        ShapedArray(v.shape, v_dtype, named_shape=v.named_shape),
+        ShapedArray(q.shape, q_dtype),
+        ShapedArray(k.shape, k_dtype),
+        ShapedArray(v.shape, v_dtype),
     )
 _flash_mha_bwd_p.def_abstract_eval(_flash_mha_bwd_abstract)
 

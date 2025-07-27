@@ -13,12 +13,6 @@ from jax.lib import xla_client
 from jaxlib.hlo_helpers import custom_call
 from jax.experimental.custom_partitioning import custom_partitioning
 
-from jax.sharding import PartitionSpec as P
-from jax.sharding import Mesh
-from jax.sharding import NamedSharding
-from jax.sharding import PositionalSharding
-from jax._src.ad_checkpoint import _optimization_barrier
-
 from einops import rearrange
 import math
 
@@ -68,11 +62,11 @@ def ring_fwd(q,k,v, axis_name, axis_size, mha_fwd, softmax_scale=None, is_causal
     # Manually unroll this until https://github.com/google/jax/pull/20884 is merged.
     # Optimization barrier prevents instruction reordering across loop iters, so that
     # ppermute and flash_mha execute concurrently (though this is unreliable).
-    for _ in range(axis_size):
-        acc, _ = f(acc, None)
-        acc = _optimization_barrier(acc)
-    (_,_,o,lse,_) = acc
-    # (_,_,o,lse,_), _ = jax.lax.scan(f,acc,None,axis_size)
+    # for _ in range(axis_size):
+    #     acc, _ = f(acc, None)
+    #     # acc = _optimization_barrier(acc)
+    # (_,_,o,lse,_) = acc
+    (_,_,o,lse,_), _ = jax.lax.scan(f,acc,None,axis_size)
     return o.astype(q.dtype), lse
 
 # ==== Ring Backward ===
@@ -125,10 +119,10 @@ def ring_bwd(do,q,k,v,o,lse, axis_name, axis_size, mha_bwd, softmax_scale=None, 
         return ((k2_,v2_,dk2_,dv2_,ix2_, dq), None)
     acc = (k,v,dk,dv,ix, dq)
     # See above (#20884).
-    for _ in range(axis_size):
-        acc, _ = f(acc, None)
-        acc = _optimization_barrier(acc)
-    # acc, _ = jax.lax.scan(f,acc,None,axis_size)
+    # for _ in range(axis_size):
+    #     acc, _ = f(acc, None)
+    #     # acc = _optimization_barrier(acc)
+    acc, _ = jax.lax.scan(f,acc,None,axis_size)
     (k,v,dk,dv,ix2, dq) = acc
     (dk,dv) = jax.lax.ppermute((dk,dv), axis_name, [(i, (i+1)%axis_size) for i in range(axis_size)])
     return dq.astype(q.dtype),dk.astype(q.dtype),dv.astype(q.dtype)

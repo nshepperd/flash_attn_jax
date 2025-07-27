@@ -41,8 +41,8 @@ jobs:
       fail-fast: false
       matrix:
           os: [ubuntu-20.04]
-          python-version: ['cp39', 'cp310', 'cp311', 'cp312']
-          cuda-version: ['11.8', '12.3']
+          python-version: ['cp311', 'cp312']
+          cuda-version: ['12.8']
 
     steps:
       - name: Checkout
@@ -51,7 +51,7 @@ jobs:
       - name: Set up python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Set CUDA and PyTorch versions
         run: |
@@ -76,7 +76,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.17.0
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-manylinux_x86_64
-          CIBW_MANYLINUX_X86_64_IMAGE: sameli/manylinux2014_x86_64_cuda_${{ matrix.cuda-version }}
+          CIBW_BEFORE_ALL: bash scripts/install-cuda-linux.sh ${{ matrix.cuda-version }}
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Log Built Wheels
@@ -128,17 +128,15 @@ jobs:
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install setuptools==68.0.0
-          pip install git+https://github.com/nshepperd/setuptools-cuda-cpp
-          pip install ninja packaging wheel pybind11
+          pip install uv
 
       - name: Build core package
         run: |
-          CUDA_HOME=/ python setup.py sdist --dist-dir=dist
+          uv build --sdist
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4

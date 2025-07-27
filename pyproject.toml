@@ -6,31 +6,35 @@ requires = [
     "packaging",
     "psutil",
     "pybind11>=2.11.0",
-    # "nvidia-cuda-runtime-cu12>=12.0",
-    # "nvidia-cuda-nvrtc-cu12",
-    # "nvidia-nvtx-cu12",
-    "torch>=2.0.0",
 ]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "flash_attn_jax"
 dynamic = ["version"]
-description = "Flash Attention: Fast and Memory-Efficient Exact Attention"
+description = "Flash Attention port for JAX"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 authors = [
     { name = "Tri Dao", email = "tri@tridao.me" },
     { name = "Emily Shepperd", email = "em@zlkj.in" }
 ]
-dependencies = []
+dependencies = [
+    "jax>=0.5.0, <0.8.0"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
     "Operating System :: Unix",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=7.0.0",
+    "einops",
+    "jax[cuda12]",
+]
 [project.urls]
 Homepage = "https://github.com/nshepperd/flash_attn_jax"
 
@@ -59,7 +63,7 @@ input = "src/flash_attn_jax/__init__.py"
 manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64:latest"
 before-all = "bash scripts/install-cuda-linux.sh"
 build = "cp312-manylinux_x86_64"
-repair-wheel-command = "auditwheel repair --exclude=libcudart.so* --exclude libtorch.so* -w {dest_dir} {wheel}"
+repair-wheel-command = "auditwheel repair --exclude=libcudart.so* -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.environment]
 PATH="/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/cuda/bin:$PATH"

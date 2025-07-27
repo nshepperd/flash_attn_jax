@@ -1,10 +1,8 @@
 import glob
 import sys, os
 
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
-if glob.glob('build/lib.linux-*'):
-    sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
-sys.path.insert(0,'./src')
+# Ring attention only works efficiently with the latency-hiding scheduler.
+os.environ["XLA_FLAGS"] = '--xla_gpu_enable_latency_hiding_scheduler=true'
 
 import math
 import einops
@@ -14,7 +12,6 @@ import numpy as np
 import pytest
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.sharding import PositionalSharding
 from jax.tree_util import tree_map
 jax.config.update("jax_traceback_filtering", "off")
 
@@ -54,7 +51,7 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
     def flash(qkv):
         return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)
 
-    def with_sharding(q_sharding, kv_sharding=None):
+    def with_sharding(q_sharding, kv_sharding=None) -> str:
         if kv_sharding is None:
             kv_sharding = q_sharding
         q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, m*h, d], dtype=dtype)
@@ -83,9 +80,7 @@ def test_flash_fwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
             assert 'dynamic-slice' not in hlo
             assert 'collective-permute' in hlo
             # Should always run concurrently, meaning custom-call is always between start and done.
-            import re
-            collectives = ''.join(re.findall(" collective-permute-start| collective-permute-done| custom-call", hlo))
-            assert 'collective-permute-start collective-permute-done' not in collectives, hlo
+            assert 'collective-permute-start collective-permute-done' not in decode_hlo(hlo), hlo
 
 
 @pytest.mark.skipif(len(jax.local_devices()) < 2, reason='Requires >1 gpu device')
@@ -100,6 +95,7 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()[:4]
+    mesh = Mesh(np.array(devices), axis_names=('x',))
     n = len(devices)
 
     @jax.jit
@@ -107,7 +103,7 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
     def flash(qkv):
         return (flash_mha(*qkv, is_causal=bool(causal), window_size=window_size)**2).sum()
 
-    def with_sharding(sharding):
+    def with_sharding(sharding) -> str:
         q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, m*h, d], dtype=dtype)
         k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
         v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
@@ -115,11 +111,11 @@ def test_flash_bwd_sharded_hlo(seqlen, h, d, m, causal, local, dtype):
         hlo = flash.lower((q,k,v)).compile().as_text()
         return hlo
 
-    hlo = with_sharding(PositionalSharding(devices).reshape(n,1,1,1))
+    hlo = with_sharding(NamedSharding(mesh, P('x',None,None,None)))
     assert 'all-gather' not in hlo
     assert 'dynamic-slice' not in hlo
 
-    hlo = with_sharding(PositionalSharding(devices).reshape(1,1,n,1))
+    hlo = with_sharding(NamedSharding(mesh, P(None,None,'x',None)))
     assert 'all-gather' not in hlo
     assert 'dynamic-slice' not in hlo
 
@@ -150,6 +146,7 @@ def test_flash_fwd_sharded(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
+    mesh = Mesh(np.array(devices), axis_names=('x',))
     n = len(devices)
 
     @jax.jit
@@ -173,8 +170,8 @@ def test_flash_fwd_sharded(seqlen, h, d, m, causal, local, dtype):
         out = flash((q,k,v))
         check(ref_out,ref16_out,out)
 
-    check_sharding(PositionalSharding(devices).reshape(n,1,1,1),q,k,v)
-    check_sharding(PositionalSharding(devices).reshape(1,1,n,1),q,k,v)
+    check_sharding(NamedSharding(mesh, P('x',None,None,None)), q, k, v)
+    check_sharding(NamedSharding(mesh, P(None,None,'x',None)), q, k, v)
 
     if not local:
         # Ring attention
@@ -195,6 +192,7 @@ def test_flash_bwd_sharded(seqlen, h, d, m, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
 
     devices = jax.local_devices()
+    mesh = Mesh(np.array(devices), axis_names=('x',))
     n = len(devices)
 
     A = 1.0 / math.sqrt(n * seqlen * h * d)
@@ -226,8 +224,8 @@ def test_flash_bwd_sharded(seqlen, h, d, m, causal, local, dtype):
         out = flash((qs,ks,vs),dos)
         check(ref_out,ref16_out,out, eps=4)
 
-    check_sharding(PositionalSharding(devices).reshape(n,1,1,1))
-    check_sharding(PositionalSharding(devices).reshape(1,1,n,1))
+    check_sharding(NamedSharding(mesh, P('x',None,None,None)))
+    check_sharding(NamedSharding(mesh, P(None,None,'x',None)))
 
     if not local:
         # Ring attention

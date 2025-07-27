@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.sharding import PositionalSharding
 from jax.tree_util import tree_map
 from jax.experimental.shard_map import shard_map
 from functools import partial

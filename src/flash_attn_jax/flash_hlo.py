@@ -12,10 +12,7 @@ from jax.interpreters.mlir import ir
 from jax.lib import xla_client
 from jax.experimental.custom_partitioning import custom_partitioning
 
-from jax.sharding import PartitionSpec as P
-from jax.sharding import Mesh
-from jax.sharding import NamedSharding
-from jax.sharding import PositionalSharding
+from jax.extend.core import Primitive
 
 from einops import rearrange
 import einops
@@ -25,15 +22,15 @@ import flash_attn_jax_lib.flash_api as flash_api
 
 # ==== Register primitives ====
 
-_flash_mha_fwd_hlo_p = core.Primitive("flash_mha_fwd_hlo")
+_flash_mha_fwd_hlo_p = Primitive("flash_mha_fwd_hlo")
 _flash_mha_fwd_hlo_p.multiple_results = True
 _flash_mha_fwd_hlo_p.def_impl(partial(xla.apply_primitive, _flash_mha_fwd_hlo_p))
 
-_flash_mha_bwd_hlo_p = core.Primitive("flash_mha_bwd_hlo")
+_flash_mha_bwd_hlo_p = Primitive("flash_mha_bwd_hlo")
 _flash_mha_bwd_hlo_p.multiple_results = True
 _flash_mha_bwd_hlo_p.def_impl(partial(xla.apply_primitive, _flash_mha_bwd_hlo_p))
 
-_custom_call_p = core.Primitive("custom_call")
+_custom_call_p = Primitive("custom_call")
 _custom_call_p.multiple_results = True
 _custom_call_p.def_impl(partial(xla.apply_primitive, _custom_call_p))
 
@@ -48,13 +45,18 @@ def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window
     return dq, dk, dv
 
 def custom_call(*args, call_target_name, result_types, backend_config, operand_layouts, result_layouts):
-    return _custom_call_p.bind(*args, call_target_name=call_target_name, result_types=result_types, backend_config=backend_config, operand_layouts=operand_layouts, result_layouts=result_layouts)
+    return _custom_call_p.bind(*args, call_target_name=call_target_name, 
+                               result_types=tuple(result_types),
+                               backend_config=backend_config,
+                               operand_layouts=tuple(operand_layouts), 
+                               result_layouts=tuple(result_layouts))
 
 # ==== HLO lowerings ====
 
 # Register functions defined in gpu_ops as custom call target for GPUs
 for _name, _value in flash_api.get_registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="gpu")
+    # xla_client.register_custom_call_target(_name, _value, platform="gpu")
+    jax.ffi.register_ffi_target(_name, _value, platform="gpu", api_version=0)
 
 def default_layouts(*shapes):
     def row_major(shape):
@@ -85,6 +87,7 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
     [nk, lk, hk, dk] = k_shape
     assert k_shape == v_shape, "K and V must have the same shape"
     assert [n, d] == [nk, dk], "Q and K must have the same batch size and head size"
+    assert isinstance(window_size, (tuple, list))
 
     opaque = flash_api.make_flash_mha_fwd_args(
         0.0, # p_dropout
@@ -164,6 +167,7 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
     [nk, lk, hk, dk] = k_shape
     assert n == nk
     assert d == dk
+    assert isinstance(window_size, (tuple, list))
 
     assert (list(map(list, [dout_shape, q_shape, k_shape, v_shape, out_shape, lse_shape])) ==
             [[n, lq, hq, d], [n, lq, hq, d], [n, lk, hk, d], [n, lk, hk, d],
@@ -238,7 +242,7 @@ def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None, is_causal=None, window_
     assert q_dtype == k_dtype and q_dtype == v_dtype
     assert q_dtype in [jnp.bfloat16, jnp.float16]
     return (
-        ShapedArray(q.shape, q_dtype, named_shape=q.named_shape),
+        ShapedArray(q.shape, q_dtype),
         ShapedArray([n, h, l], jnp.float32)
     )
 _flash_mha_fwd_hlo_p.def_abstract_eval(_flash_mha_fwd_abstract)
@@ -255,9 +259,9 @@ def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, is_caus
     assert len(set([dout_dtype, q_dtype, k_dtype, v_dtype, out_dtype])) == 1
     assert q_dtype in [jnp.bfloat16, jnp.float16]
     return (
-        ShapedArray(q.shape, q_dtype, named_shape=q.named_shape),
-        ShapedArray(k.shape, k_dtype, named_shape=k.named_shape),
-        ShapedArray(v.shape, v_dtype, named_shape=v.named_shape),
+        ShapedArray(q.shape, q_dtype),
+        ShapedArray(k.shape, k_dtype),
+        ShapedArray(v.shape, v_dtype),
     )
 _flash_mha_bwd_hlo_p.def_abstract_eval(_flash_mha_bwd_abstract)
 
@@ -278,10 +282,10 @@ def _custom_call_hlo_lowering(ctx, *args, call_target_name, result_types, backen
     out = mlir.custom_call(
             call_target_name,
             operands=args,
-            result_types=result_types,
+            result_types=list(result_types),
             backend_config=backend_config,
-            operand_layouts=operand_layouts,
-            result_layouts=result_layouts,
+            operand_layouts=list(operand_layouts),
+            result_layouts=list(result_layouts),
         ).results
     return out
 
