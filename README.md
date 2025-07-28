@@ -1,7 +1,7 @@
 # FlashAttention JAX
 This repository provides a jax binding to <https://github.com/Dao-AILab/flash-attention>. To avoid depending on pytorch, since torch and jax installations often conflict, this is a fork of the official repo.
 
-Please see [Tri Dao's repo](https://github.com/Dao-AILab/flash-attention) for more information about flash attention.
+Please see [Tri Dao's repo](https://github.com/Dao-AILab/flash-attention) for more information about flash attention. Also check there for how to cite the authors if you used flash attention in your work.
 
 FlashAttention and FlashAttention-2 are free to use and modify (see LICENSE).
 Please cite (see below) and credit FlashAttention if you use it.
@@ -9,11 +9,12 @@ Please cite (see below) and credit FlashAttention if you use it.
 ## Installation
 
 Requirements:
-- CUDA 11.8 and above.
+- CUDA 12.8 and above.
 - Linux. Same story as with the pytorch repo. I haven't tested compilation of the jax bindings on windows.
-- JAX >=`0.4.24`. The custom sharding used for ring attention requires some somewhat advanced features.
+- JAX >= `0.5.*`. The custom call api changed in this version.
 
-To install: `pip install flash-attn-jax` will get the latest release from pypi. This gives you the cuda 12.3 build. If you want to use the cuda 11.8 build, you can install from the releases page (but according to jax's documentation, 11.8 will stop being supported for newer versions of jax).
+To install: `pip install flash-attn-jax` will get the latest release from pypi. This gives you the cuda 12.8
+build. CUDA 11 isn't supported any more (since jax stopped supporting it).
 
 ### Installing from source
 
@@ -25,7 +26,7 @@ cd flash-attn-jax
 cibuildwheel --only cp312-manylinux_x86_64 # I think cibuildwheel needs superuser privileges on some systems because of docker reasons?
 ```
 
-This will create a wheel in the `wheelhouse` directory. You can then install it with `pip install wheelhouse/flash_attn_jax_0.2.0-cp312-cp312-manylinux_x86_64.whl`. Or you could use setup.py to build the wheel and install it. You need cuda toolkit installed in that case.
+This will create a wheel in the `wheelhouse` directory. You can then install it with `pip install wheelhouse/flash_attn_jax_*.whl`. Or you could build it without docker using `uv build --wheel`. You need cuda installed in that case.
 
 ## Usage
 
@@ -45,7 +46,7 @@ This supports multi-query and grouped-query attention (when hk != h). The `softm
 Use jax.Array and shard your tensors along the length dimension, and flash_mha will automatically use the ring attention algorithm (forward and backward).
 
 ```py
-os.environ["XLA_FLAGS"] = '--xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_enable_async_collectives=true'
+os.environ["XLA_FLAGS"] = '--xla_gpu_enable_latency_hiding_scheduler=true'
 #...
 with Mesh(devices, axis_names=('len',)) as mesh:
         sharding = NamedSharding(mesh, P(None,'len')) # n l
@@ -53,7 +54,8 @@ with Mesh(devices, axis_names=('len',)) as mesh:
         # invoke your jax.jit'd transformer.forward
 ```
 
-It's not entirely reliable at hiding the communication latency though, depending on the whims of the xla optimizer. I'm waiting https://github.com/google/jax/issues/20864 to be fixed, then I can make it better.
+The latency hiding seems to be reliable now that some bugs have been fixed, as long as you enable the 
+latency hiding scheduler as above.
 
 ### GPU support
 
@@ -63,19 +65,3 @@ FlashAttention-2 currently supports:
    GPUs for now.
 2. Datatype fp16 and bf16 (bf16 requires Ampere, Ada, or Hopper GPUs).
 3. All head dimensions up to 256. ~~Head dim > 192 backward requires A100/A800 or H100/H800~~. Head dim 256 backward now works on consumer GPUs (if there's no dropout) as of flash-attn 2.5.5.
-
-## Citation
-If you use this codebase, or otherwise found our work valuable, please cite:
-```
-@inproceedings{dao2022flashattention,
-  title={Flash{A}ttention: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
-  author={Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2022}
-}
-@article{dao2023flashattention2,
-  title={Flash{A}ttention-2: Faster Attention with Better Parallelism and Work Partitioning},
-  author={Dao, Tri},
-  year={2023}
-}
-```

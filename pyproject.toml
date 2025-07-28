@@ -1,5 +1,70 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools-cuda-cpp @ git+https://github.com/nshepperd/setuptools-cuda-cpp", "packaging", "pybind11"]
+requires = [
+    "scikit-build-core>=0.8.0",
+    "cmake>=3.18",
+    "ninja>=1.10",
+    "packaging",
+    "psutil",
+    "pybind11>=2.11.0",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "flash_attn_jax"
+dynamic = ["version"]
+description = "Flash Attention port for JAX"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "BSD-3-Clause" }
+authors = [
+    { name = "Tri Dao", email = "tri@tridao.me" },
+    { name = "Emily Shepperd", email = "em@zlkj.in" }
+]
+dependencies = [
+    "jax>=0.5.0, <0.8.0"
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: Unix",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=7.0.0",
+    "einops",
+    "jax[cuda12]",
+]
+[project.urls]
+Homepage = "https://github.com/nshepperd/flash_attn_jax"
+
+[tool.scikit-build]
+wheel.expand-macos-universal-tags = false
+cmake.version = ">=3.26.1"
+ninja.version = ">=1.11"
+build.verbose = true
+cmake.build-type = "Release"
+cmake.args = []
+
+[tool.scikit-build.cmake.define]
+SKBUILD = "ON"
+FLASH_ATTENTION_FORCE_BUILD = { env = "FLASH_ATTENTION_FORCE_BUILD" }
+FLASH_ATTENTION_SKIP_CUDA_BUILD = { env = "FLASH_ATTENTION_SKIP_CUDA_BUILD" }
+FLASH_ATTENTION_FORCE_CXX11_ABI = { env = "FLASH_ATTENTION_FORCE_CXX11_ABI" }
+FLASH_ATTENTION_TRITON_AMD_ENABLE = { env = "FLASH_ATTENTION_TRITON_AMD_ENABLE" }
+FLASH_ATTN_CUDA_ARCHS = { env = "FLASH_ATTN_CUDA_ARCHS" }
+CMAKE_VERBOSE_MAKEFILE = "ON"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "src/flash_attn_jax/__init__.py"
 
 [tool.cibuildwheel]
-manylinux-x86_64-image = "sameli/manylinux_2_28_x86_64_cuda_12.3"
+# manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64:latest"
+before-all = "bash scripts/install-cuda-linux.sh"
+build = "cp312-manylinux_x86_64"
+repair-wheel-command = "auditwheel repair --exclude=libcudart.so* -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.environment]
+PATH="/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/cuda/bin:$PATH"
+CUDA_HOME="/usr/local/cuda"
