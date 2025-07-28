@@ -60,7 +60,7 @@ provider = "scikit_build_core.metadata.regex"
 input = "src/flash_attn_jax/__init__.py"
 
 [tool.cibuildwheel]
-manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64:latest"
+# manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64:latest"
 before-all = "bash scripts/install-cuda-linux.sh"
 build = "cp312-manylinux_x86_64"
 repair-wheel-command = "auditwheel repair --exclude=libcudart.so* -w {dest_dir} {wheel}"

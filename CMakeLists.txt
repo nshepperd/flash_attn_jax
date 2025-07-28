@@ -34,11 +34,6 @@ if(CCACHE_PROGRAM)
     message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
 endif()
 
-# Options from environment variables
-option(FLASH_ATTENTION_FORCE_BUILD "Force building from source" OFF)
-option(FLASH_ATTENTION_SKIP_CUDA_BUILD "Skip CUDA build" OFF)
-option(FLASH_ATTENTION_FORCE_CXX11_ABI "Force using C++11 ABI" OFF)
-
 # CUDA handling
 # Get CUDA architectures from environment or use default
 if(DEFINED ENV{FLASH_ATTN_CUDA_ARCHS})
@@ -62,6 +57,8 @@ set(CUDA_FLAGS
     -U__CUDA_NO_HALF_CONVERSIONS__
     -U__CUDA_NO_HALF2_OPERATORS__
     -U__CUDA_NO_BFLOAT16_CONVERSIONS__
+    -DFLASHATTENTION_DISABLE_DROPOUT=1
+    -DFLASHATTENTION_DISABLE_ALIBI=1
 )
 
 # Collect source files
