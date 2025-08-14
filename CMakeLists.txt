@@ -11,6 +11,8 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 # == Find dependencies ==
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
+message(STATUS "Python executable: ${Python_EXECUTABLE}")
+
 execute_process(
     COMMAND ${Python_EXECUTABLE} -m pybind11 --cmakedir
     OUTPUT_VARIABLE pybind11_DIR
@@ -88,6 +90,8 @@ target_include_directories(flash_api PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/flash_attn
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/flash_attn/src
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+
 )
 
 target_link_libraries(flash_api PRIVATE

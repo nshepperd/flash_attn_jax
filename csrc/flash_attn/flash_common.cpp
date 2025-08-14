@@ -5,13 +5,14 @@
 #include <pybind11/pybind11.h>
 
 #include "flash.h"
-#include "exception.h"
-#include "static_switch.h"
 #include "check.h"
 #include "flash_common.h"
+#include "xla/ffi/api/ffi.h"
 
-void set_params_fprop(Flash_fwd_params &params,
-					  ElementType element_type,
+namespace ffi = xla::ffi;
+
+ffi::Error set_params_fprop(Flash_fwd_params &params,
+					  ffi::DataType element_type,
                       // sizes
                       const size_t b,
                       const size_t seqlen_q,
@@ -41,7 +42,7 @@ void set_params_fprop(Flash_fwd_params &params,
     // Reset the parameters
     memset(&params, 0, sizeof(params));
 
-    params.is_bf16 = element_type == BF16;
+    params.is_bf16 = element_type == ffi::DataType::BF16;
 
     // Set the pointers and strides.
     params.q_ptr = q_ptr;
@@ -110,7 +111,7 @@ void set_params_fprop(Flash_fwd_params &params,
     params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
     params.rp_dropout = 1.f / params.p_dropout;
     params.scale_softmax_rp_dropout = params.rp_dropout * params.scale_softmax;
-    CHECK(p_dropout < 1.f, "dropout must be <1");
+    FFI_CHECK(p_dropout < 1.f) << "dropout must be <1";
 
     // Causal is the special case where window_size_right == 0 and window_size_left < 0.
     // Local is the more general case where window_size_right >= 0 or window_size_left >= 0.
@@ -122,6 +123,8 @@ void set_params_fprop(Flash_fwd_params &params,
     params.window_size_right = window_size_right;
 
     params.is_seqlens_k_cumulative = true;
+
+    return ffi::Error(); // Success
 }
 
 // Find the number of splits that maximizes the occupancy. For example, if we have
@@ -166,10 +169,10 @@ int num_splits_heuristic(int batch_nheads_mblocks, int num_SMs, int num_n_blocks
     return 1;
 }
 
-void set_params_splitkv(Flash_fwd_params &params, const int batch_size,
+ffi::Error set_params_splitkv(ffi::ScratchAllocator* scratch, Flash_fwd_params& params, const int batch_size,
 						const int num_heads, const int head_size, const int max_seqlen_k, const int max_seqlen_q,
 						const int head_size_rounded, const float p_dropout,
-						const int num_splits, int multiProcessorCount, ElementType dtype) {
+						const int num_splits, int multiProcessorCount, ffi::DataType dtype) {
     // This needs to match with run_mha_fwd_splitkv_dispatch
     const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
     const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
@@ -184,13 +187,14 @@ void set_params_splitkv(Flash_fwd_params &params, const int batch_size,
             params.num_splits = num_splits_heuristic(batch_size * num_heads * num_m_blocks, multiProcessorCount, num_n_blocks, 128);
         }
         if (params.num_splits > 1) {
-            // at::Tensor softmax_lse_accum = torch::empty({params.num_splits, batch_size, num_heads, max_seqlen_q}, opts.dtype(at::kFloat));
-            // at::Tensor out_accum = torch::empty({params.num_splits, batch_size, num_heads, max_seqlen_q, head_size_rounded}, opts.dtype(at::kFloat));
-			C10_CUDA_CHECK(cudaMalloc((void**)&params.softmax_lseaccum_ptr, params.num_splits * batch_size * num_heads * max_seqlen_q * 4)); // float32
-			C10_CUDA_CHECK(cudaMalloc((void**)&params.oaccum_ptr, params.num_splits * batch_size * num_heads * max_seqlen_q * head_size_rounded * 4));
-            // params.softmax_lseaccum_ptr = softmax_lse_accum.data_ptr();
-            // params.oaccum_ptr = out_accum.data_ptr();
+            FFI_CHECK_OPTIONAL(*(void**)&params.softmax_lseaccum_ptr, scratch->Allocate(
+                params.num_splits * batch_size * num_heads * max_seqlen_q * 4, 4))
+                << "Failed to allocate memory for softmax_lseaccum";
+            FFI_CHECK_OPTIONAL(*(void**)&params.oaccum_ptr, scratch->Allocate(
+                params.num_splits * batch_size * num_heads * max_seqlen_q * head_size_rounded * 4, 4))
+                << "Failed to allocate memory for oaccum";
         }
-        CHECK(params.num_splits <= 128, "num_splits > 128 not supported");
+        FFI_CHECK(params.num_splits <= 128) << "num_splits > 128 not supported - " << params.num_splits;
     }
+    return ffi::Error();
 }

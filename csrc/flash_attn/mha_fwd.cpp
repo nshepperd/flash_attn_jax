@@ -8,12 +8,13 @@
 #include <pybind11/pybind11.h>
 
 #include "flash.h"
-#include "exception.h"
 #include "static_switch.h"
 #include "check.h"
-
 #include "flash_common.h"
 #include "mha_fwd.h"
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
     FP16_SWITCH(!params.is_bf16, [&] {
@@ -28,75 +29,46 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split
 }
 
 
-void mha_fwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opaque_len) {
-	// buffers:
-	//   &q,         // batch_size x seqlen_q x num_heads x head_size
-	//   &k,         // batch_size x seqlen_k x num_heads_k x head_size
-	//   &v,         // batch_size x seqlen_k x num_heads_k x head_size
-	//   &out_,             // [batch_size,   seqlen_q,  num_heads,  head_size]
-	//   &softmax_lse       // [batch_size,  num_heads,  seqlen_q]
-	//  x &alibi_slopes_, // num_heads or batch_size x num_heads
-	void* q = buffers[0];
-	void* k = buffers[1];
-	void* v = buffers[2];
-	void* o = buffers[3];
-	void* lse = buffers[4];
-
-	mha_fwd_args args = Unpack<mha_fwd_args>(opaque, opaque_len);
-        // const float p_dropout,
-        // const float softmax_scale,
-        // bool is_causal,
-        // int window_size_left,
-        // int window_size_right,
-        // const bool return_softmax,
-        // c10::optional<at::Generator> gen_) {
-
+ffi::Error mha_fwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch, ffi::AnyBuffer q, ffi::AnyBuffer k,
+             ffi::AnyBuffer v, ffi::Result<ffi::AnyBuffer> o,
+             ffi::ResultBuffer<ffi::F32> lse, double softmax_scale,
+            bool is_causal, int64_t window_size_left, int64_t window_size_right) {
 	int device, major, minor;
-	C10_CUDA_CHECK(cudaGetDevice(&device));
-	C10_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-	C10_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
+    FFI_CUDA_CHECK(cudaStreamGetDevice(stream, &device));
+	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
 
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
     bool is_sm8x = major == 8 && minor >= 0;
     bool is_sm90 = major == 9 && minor == 0;
-    CHECK(is_sm90 || is_sm8x, "FlashAttention only supports Ampere GPUs or newer.");
+    FFI_CHECK(is_sm90 || is_sm8x) << ffi::ErrorCode::kUnimplemented << "FlashAttention only supports Ampere GPUs or newer.";
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
 
-    CHECK(args.dtype == FP16 || args.dtype == BF16, "FlashAttention only support fp16 and bf16 data type");
-    if (args.dtype == BF16) {
-        CHECK(is_sm90 || is_sm8x, "bfloat16 is only supported on Ampere GPUs or newer");
+    ffi::DataType dtype = q.element_type();
+    FFI_CHECK(dtype == k.element_type() && dtype == v.element_type() && dtype == o->element_type()) << ffi::ErrorCode::kInvalidArgument
+        << "query, key and value must have the same dtype";
+    FFI_CHECK(dtype == ffi::DataType::F16 || dtype == ffi::DataType::BF16) << ffi::ErrorCode::kInvalidArgument << "FlashAttention only support fp16 and bf16 data type";
+    if (dtype == ffi::DataType::BF16) {
+        FFI_CHECK(is_sm90 || is_sm8x) << ffi::ErrorCode::kInvalidArgument << "bfloat16 is only supported on Ampere GPUs or newer";
     }
-    // TORCH_CHECK(k.dtype() == q_dtype, "query and key must have the same dtype");
-    // TORCH_CHECK(v.dtype() == q_dtype, "query and value must have the same dtype");
 
-    // CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
+    const int batch_size = q.dimensions()[0];
+    int seqlen_q = q.dimensions()[1];
+    int num_heads = q.dimensions()[2];
+    const int head_size = q.dimensions()[3];
+    const int seqlen_k = k.dimensions()[1];
+    const int num_heads_k = k.dimensions()[2];
+    FFI_CHECK(batch_size > 0) << "batch size must be postive";
+    FFI_CHECK(head_size <= 256) << "FlashAttention forward only supports head dimension at most 256";
+    FFI_CHECK(num_heads % num_heads_k == 0) << "Number of heads in key/value must divide number of heads in query";
 
-    // TORCH_CHECK(q.stride(-1) == 1, "Input tensor must have contiguous last dimension");
-    // TORCH_CHECK(k.stride(-1) == 1, "Input tensor must have contiguous last dimension");
-    // TORCH_CHECK(v.stride(-1) == 1, "Input tensor must have contiguous last dimension");
-
-    // const auto sizes = q.sizes();
-
-    const int batch_size = args.n;
-    int seqlen_q = args.l;
-    int num_heads = args.h;
-    const int head_size_og = args.d;
-    const int seqlen_k = args.l_k;
-    const int num_heads_k = args.h_k;
-    CHECK(batch_size > 0, "batch size must be postive");
-    CHECK(head_size_og <= 256, "FlashAttention forward only supports head dimension at most 256");
-    CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide number of heads in query");
-
-    if (args.window_size_left >= seqlen_k) { args.window_size_left = -1; }
-    if (args.window_size_right >= seqlen_k) { args.window_size_right = -1; }
-
-	bool has_alibi = false;
+    if (window_size_left >= seqlen_k) { window_size_left = -1; }
+    if (window_size_right >= seqlen_k) { window_size_right = -1; }
 
     // causal=true is the same as causal=false in this case
-    if (seqlen_q == 1 && !has_alibi) { args.is_causal = false; }
-	if (seqlen_q == 1) { args.is_causal = false; }
-    if (args.is_causal) { args.window_size_right = 0; }
+	if (seqlen_q == 1) { is_causal = false; }
+    if (is_causal) { window_size_right = 0; }
 
     // Faster to transpose q from (b, 1, (nheads_kv ngroups), d) to (b, ngroups, nheads_kv, d) in this case
     // H/t Daniel Haziza
@@ -109,149 +81,70 @@ void mha_fwd(cudaStream_t stream, void **buffers, const char* opaque, size_t opa
     //     num_heads = num_heads_k;
     // }
 
-    // CHECK_SHAPE(q, batch_size, seqlen_q, num_heads, head_size_og);
-    // CHECK_SHAPE(k, batch_size, seqlen_k, num_heads_k, head_size_og);
-    // CHECK_SHAPE(v, batch_size, seqlen_k, num_heads_k, head_size_og);
+    // Inputs and outputs are already padded to be divisible by 8.
+	void *q_padded=q.untyped_data(), *k_padded=k.untyped_data(), *v_padded=v.untyped_data();
 
-    // at::Tensor q_padded, k_padded, v_padded;
-	void *q_padded=q, *k_padded=k, *v_padded=v;
-    // if (head_size_og % 8 != 0) {
-	// 	// CHECK(false, "can't pad");
-    //     // q_padded = torch::nn::functional::pad(q, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-    //     // k_padded = torch::nn::functional::pad(k, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-    //     // v_padded = torch::nn::functional::pad(v, torch::nn::functional::PadFuncOptions({0, 8 - head_size_og % 8}));
-    // } else {
-    //     q_padded = q;
-    //     k_padded = k;
-    //     v_padded = v;
-    // }
-
-    // at::Tensor out;
-    // if (out_.has_value()) {
-    //     out = out_.value();
-    //     TORCH_CHECK(out.dtype() == q_dtype, "Output must have the same dtype as inputs");
-    //     CHECK_DEVICE(out);
-    //     TORCH_CHECK(out.stride(-1) == 1, "Output tensor must have contiguous last dimension");
-    //     CHECK_SHAPE(out, batch_size, seqlen_q, num_heads, head_size_og);
-    //     if (head_size_og % 8 != 0) { out = torch::empty_like(q_padded); }
-    // } else {
-    //     out = torch::empty_like(q_padded);
-    // }
-
+    FFI_CHECK(head_size % 8 == 0) << ffi::ErrorCode::kInvalidArgument
+        << "head_size must be divisible by 8, got " << head_size;
     auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
-    const int head_size = round_multiple(head_size_og, 8);
     const int head_size_rounded = round_multiple(head_size, 32);
     const int seqlen_q_rounded = round_multiple(seqlen_q, 128);
     const int seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
-    // Otherwise the kernel will be launched from cuda:0 device
-    // Cast to char to avoid compiler warning about narrowing
-    // at::cuda::CUDAGuard device_guard{(char)q.get_device()};
-
-    // auto opts = q.options();
-
-
-    // auto softmax_lse = torch::empty({batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
-	void* p = nullptr;
-    // // at::Tensor p;
-    // // Only return softmax if there's dropout to reduce compilation time
-    if (args.return_softmax) {
-		CHECK(false, "no return softmax");
-        // TORCH_CHECK(p_dropout > 0.0f, "return_softmax is only supported when p_dropout > 0.0");
-        // p = torch::empty({ batch_size, num_heads, seqlen_q_rounded, seqlen_k_rounded }, opts);
-    }
+    void* p = nullptr;
 
     Flash_fwd_params params;
-    set_params_fprop(params, args.dtype,
+    FFI_RET_CHECK(set_params_fprop(params, dtype,
                      batch_size,
                      seqlen_q, seqlen_k,
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q_padded, k_padded, v_padded, o,
+                     q_padded, k_padded, v_padded, o->untyped_data(),
                      /*cu_seqlens_q_d=*/nullptr,
                      /*cu_seqlens_k_d=*/nullptr,
                      /*seqused_k=*/nullptr,
-                     args.return_softmax ? p : nullptr,
-                     lse,
-                     args.p_dropout,
-                     args.softmax_scale,
-                     args.window_size_left,
-                     args.window_size_right);
+                     nullptr,
+                     lse->untyped_data(),
+                     0.0,
+                     softmax_scale,
+                     window_size_left,
+                     window_size_right));
 
 
 	int sm_count;
-	C10_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
+	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
 
-    set_params_splitkv(params, batch_size, num_heads,
+    FFI_RET_CHECK(set_params_splitkv(&scratch, params, batch_size, num_heads,
                        head_size, seqlen_k, seqlen_q,
-                       head_size_rounded, args.p_dropout, /*num_splits*/0, sm_count, args.dtype);
+                       head_size_rounded, 0.0, /*num_splits*/0, sm_count,
+                        dtype));
 
-    // number of times random will be generated per thread, to offset philox counter in thc random
-    // state
-    // We use a custom RNG that increases the offset by batch_size * nheads * 32.
     int64_t counter_offset = params.b * params.h * 32;
-	C10_CUDA_CHECK(cudaMalloc((void**)&params.rng_state, 2 * 8)); // 2 * float64
+    auto rng_state = scratch.Allocate(2 * sizeof(uint64_t), 8); // 2 * float64
+    FFI_CHECK(rng_state.has_value()) << "Failed to allocate memory for RNG state";
+    params.rng_state = reinterpret_cast<uint64_t*>(rng_state.value());
+
     // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
     // auto rng_state = torch::empty({2}, options.dtype(torch::kInt64));
     // // Forward kernel will populate memory with the seed and offset.
     // params.rng_state = reinterpret_cast<uint64_t*>(rng_state.data_ptr());
 
-    if (args.p_dropout > 0.0)  {
-        // auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(
-        //     gen_, at::cuda::detail::getDefaultCUDAGenerator());
-        // // See Note [Acquire lock when using random generators]
-        // std::lock_guard<std::mutex> lock(gen->mutex_);
-        // params.philox_args = gen->philox_cuda_state(counter_offset);
-		CHECK(false, "don't support dropout yet");
-		// params.philox_args = {{0}, 0};
-    }
 
-
-    if (has_alibi) {
-        // auto alibi_slopes = alibi_slopes_.value();
-        // TORCH_CHECK(alibi_slopes.dtype() == torch::kFloat32, "ALiBi slopes must have dtype fp32");
-        // CHECK_DEVICE(alibi_slopes);
-        // TORCH_CHECK(alibi_slopes.stride(-1) == 1, "ALiBi slopes tensor must have contiguous last dimension");
-        // TORCH_CHECK(alibi_slopes.sizes() == torch::IntArrayRef({num_heads}) || alibi_slopes.sizes() == torch::IntArrayRef({batch_size, num_heads}));
-        // params.alibi_slopes_ptr = alibi_slopes.data_ptr();
-        // params.alibi_slopes_batch_stride = alibi_slopes.dim() == 2 ? alibi_slopes.stride(0) : 0;
-    } else {
-        params.alibi_slopes_ptr = nullptr;
-    }
+    params.alibi_slopes_ptr = nullptr;
 
     if (seqlen_k > 0) {
-        // auto stream = at::cuda::getCurrentCUDAStream().stream();
 		run_mha_fwd(params, stream);
 		// C10_CUDA_CHECK(cudaStreamSynchronize(stream));
 		// C10_CUDA_CHECK(cudaDeviceSynchronize());
     } else {
-		CHECK(false, "seqlen_k is zero");
+		FFI_CHECK(false) << "seqlen_k is zero";
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         // out.zero_();
         // softmax_lse.fill_(std::numeric_limits<float>::infinity());
     }
 
-	C10_CUDA_CHECK(cudaFree(params.rng_state));
-	if(params.softmax_lseaccum_ptr != nullptr) {
-		C10_CUDA_CHECK(cudaFree(params.softmax_lseaccum_ptr));
-		C10_CUDA_CHECK(cudaFree(params.oaccum_ptr));
-	}
-
-
-    // at::Tensor out_padded = out;
-    // if (head_size_og % 8 != 0) {
-    //     out = out.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
-    //     if (out_.has_value()) { out_.value().copy_(out); }
-    // }
-
-    // if (seqlenq_ngroups_swapped) {
-    //     out = out.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size_og});
-    //     out_padded = out_padded.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size_og});
-    //     q_padded = q_padded.transpose(1, 2).reshape({batch_size, 1, num_heads_k * seqlen_q, head_size_og});
-    //     softmax_lse = softmax_lse.reshape({batch_size, num_heads_k * seqlen_q, 1});
-    // }
-    // return {out, q_padded, k_padded, v_padded, out_padded, softmax_lse, p, rng_state};
+    return ffi::Error();
 }
 
 

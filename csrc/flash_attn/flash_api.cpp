@@ -7,14 +7,14 @@
 #include <cuda_runtime_api.h>
 #include <pybind11/pybind11.h>
 
-#include "flash.h"
-#include "exception.h"
-#include "static_switch.h"
 #include "check.h"
 
-#include "flash_common.h"
 #include "mha_fwd.h"
 #include "mha_bwd.h"
+#include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
+
+namespace ffi = xla::ffi;
 
 // std::vector<at::Tensor>
 // mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_heads x head_size
@@ -295,62 +295,61 @@
 
 namespace {
 
-template <typename T> pybind11::capsule EncapsulateFunction(T *fn) {
-  return pybind11::capsule(reinterpret_cast<void *>(fn), "xla._CUSTOM_CALL_TARGET");
-}
-
 template <typename T>
-inline std::string PackDescriptorAsString(const T& descriptor) {
-  return std::string(reinterpret_cast<const char*>(&descriptor), sizeof(T));
+pybind11::capsule EncapsulateFfiCall(T *fn) {
+  static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
+                "Encapsulated function must be an XLA FFI handler");
+  return pybind11::capsule(reinterpret_cast<void *>(fn));
 }
 
-template <typename T> pybind11::bytes PackDescriptor(const T &descriptor) {
-  return pybind11::bytes(PackDescriptorAsString(descriptor));
-}
+XLA_FFI_DEFINE_HANDLER(
+	mha_fwd, mha_fwd_impl,
+	ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+		.Ctx<ffi::ScratchAllocator>()
+		.Arg<ffi::AnyBuffer>()
+		.Arg<ffi::AnyBuffer>()
+		.Arg<ffi::AnyBuffer>()
+		.Ret<ffi::AnyBuffer>()
+		.Ret<ffi::Buffer<ffi::F32>>()
+		.Attr<double>("softmax_scale")
+		.Attr<bool>("is_causal")
+		.Attr<int64_t>("window_size_left")
+		.Attr<int64_t>("window_size_right")
+);
 
-pybind11::bytes make_mha_fwd_args(	float p_dropout,
-									float softmax_scale,
-									bool is_causal,
-									int window_size_left,
-									int window_size_right,
-									bool return_softmax,
-									int n, int l, int h, int d,
-									int l_k, int h_k,
-									ElementType dtype,
-									uint64_t seed) {
-	return PackDescriptor(mha_fwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, return_softmax, n, l, h, d, l_k, h_k, dtype, seed});
-}
+XLA_FFI_DEFINE_HANDLER(
+	mha_bwd, mha_bwd_impl,
+	ffi::Ffi::Bind()
+		.Ctx<ffi::PlatformStream<cudaStream_t>>()
+		.Ctx<ffi::ScratchAllocator>()
+		.Arg<ffi::AnyBuffer>() // dout
+		.Arg<ffi::AnyBuffer>() // q
+		.Arg<ffi::AnyBuffer>() // k
+		.Arg<ffi::AnyBuffer>() // v
+		.Arg<ffi::AnyBuffer>() // o
+		.Arg<ffi::Buffer<ffi::F32>>() // lse
+		.Ret<ffi::AnyBuffer>() // dq
+		.Ret<ffi::AnyBuffer>() // dk
+		.Ret<ffi::AnyBuffer>() // dv
+		.Attr<double>("softmax_scale")
+		.Attr<bool>("is_causal")
+		.Attr<int64_t>("window_size_left")
+		.Attr<int64_t>("window_size_right")
+);
 
-pybind11::bytes make_mha_bwd_args(	float p_dropout,
-									float softmax_scale,
-									bool is_causal,
-									int window_size_left,
-									int window_size_right,
-									bool deterministic,
-									int n, int l, int h, int d,
-									int l_k, int h_k,
-									ElementType dtype,
-									uint64_t seed) {
-	return PackDescriptor(mha_bwd_args{p_dropout, softmax_scale, is_causal, window_size_left, window_size_right, deterministic, n, l, h, d, l_k, h_k, dtype, seed});
-}
 
-pybind11::dict Registrations() {
+pybind11::dict FFIRegistrations() {
   pybind11::dict dict;
-  dict["flash_mha_fwd"] = EncapsulateFunction(mha_fwd);
-  dict["flash_mha_bwd"] = EncapsulateFunction(mha_bwd);
+  dict["flash_mha_fwd"] = EncapsulateFfiCall(mha_fwd);
+  dict["flash_mha_bwd"] = EncapsulateFfiCall(mha_bwd);
   return dict;
 }
 
 
 PYBIND11_MODULE(flash_api, m) {
     m.doc() = "FlashAttention";
-	m.def("get_registrations", &Registrations);
-	m.def("make_flash_mha_fwd_args", &make_mha_fwd_args);
-	m.def("make_flash_mha_bwd_args", &make_mha_bwd_args);
-	pybind11::enum_<ElementType>(m, "ElementType")
-		.value("BF16", BF16)
-		.value("FP16", FP16)
-		.export_values();
+	m.def("get_ffi_registrations", &FFIRegistrations);
 
     // m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");
     // m.def("bwd", &mha_bwd, "Backward pass");
@@ -358,4 +357,4 @@ PYBIND11_MODULE(flash_api, m) {
     // m.def("fwd_kvcache", &mha_fwd_kvcache, "Forward pass, with KV-cache");
 }
 
-}
+} // namespace

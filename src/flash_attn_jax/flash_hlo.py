@@ -42,8 +42,8 @@ def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window
 # ==== HLO lowerings ====
 
 # Register functions defined in gpu_ops as custom call target for GPUs
-for _name, _value in flash_api.get_registrations().items():
-    jax.ffi.register_ffi_target(_name, _value, platform="gpu", api_version=0)
+for _name, _value in flash_api.get_ffi_registrations().items():
+    jax.ffi.register_ffi_target(_name, _value, platform="CUDA")
 
 def default_layouts(*shapes):
     def row_major(shape):
@@ -76,18 +76,6 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
     assert [n, d] == [nk, dk], "Q and K must have the same batch size and head size"
     assert isinstance(window_size, (tuple, list))
 
-    opaque = flash_api.make_flash_mha_fwd_args(
-        0.0, # p_dropout
-        softmax_scale,
-        is_causal, # is_causal
-        window_size[0], # window_size_left
-        window_size[1], # window_size_right
-        False, # return_softmax
-        n, l, h, d,
-        lk, hk,
-        flash_api.BF16 if type(element_type) == ir.BF16Type else flash_api.FP16,
-        0)
-
     def fwd(q, k, v):
         dpad = (8 - d%8) % 8
         if dpad > 0:
@@ -109,11 +97,12 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
             "flash_mha_fwd", 
             result_shape_dtypes=out_types,
             has_side_effect=False,
-            legacy_backend_config=opaque,
             input_layouts=[None, None, None], # default row major
             output_layouts=[None, None],
-            custom_call_api_version=1
-            )(q, k, v)
+            )(q, k, v, softmax_scale=softmax_scale,
+            is_causal=is_causal,
+            window_size_left=window_size[0],
+            window_size_right=window_size[1])
 
         if dpad > 0:
             o = o[:,:,:,:d]
@@ -122,7 +111,7 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
 
 mlir.register_lowering(
     _flash_mha_fwd_hlo_p,
-    _flash_mha_fwd_hlo_lowering,
+    _flash_mha_fwd_hlo_lowering, # type: ignore
     platform="gpu",
 )
 
@@ -158,19 +147,6 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
             [[n, lq, hq, d], [n, lq, hq, d], [n, lk, hk, d], [n, lk, hk, d],
              [n, lq, hq, d], [n, hq, lq]])
 
-
-    opaque = flash_api.make_flash_mha_bwd_args(
-        0.0, # p_dropout
-        softmax_scale,
-        is_causal, # is_causal
-        window_size[0], # window_size_left
-        window_size[1], # window_size_right
-        False, # deterministic
-        n, lq, hq, d,
-        lk, hk,
-        flash_api.BF16 if type(q_type) == ir.BF16Type else flash_api.FP16,
-        0)
-
     def fwd(dout, q, k, v, out, lse):
         dpad = (8 - d%8) % 8
         if dpad > 0:
@@ -191,11 +167,12 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
             "flash_mha_bwd", 
             result_shape_dtypes=out_types,
             has_side_effect=False,
-            legacy_backend_config=opaque,
             input_layouts=[None]*6, # default row major
             output_layouts=[None]*3,
-            custom_call_api_version=1
-            )(dout, q, k, v, out, lse)
+            )(dout, q, k, v, out, lse, softmax_scale=softmax_scale,
+            is_causal=is_causal,
+            window_size_left=window_size[0],
+            window_size_right=window_size[1])
 
         if hq != hk:
             assert hq > hk and hq % hk == 0
@@ -214,7 +191,7 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
 
 mlir.register_lowering(
     _flash_mha_bwd_hlo_p,
-    _flash_mha_bwd_hlo_lowering,
+    _flash_mha_bwd_hlo_lowering,  # type: ignore
     platform="gpu",
 )
 
