@@ -14,7 +14,6 @@ public:
   explicit CheckHelper(std::string expr) : expr_(expr) {}
 
   template <typename T> inline CheckHelper &operator<<(const T &value) {
-    fprintf(stderr, "debug: adding value %s\n", value);
     stream_ << value;
     return *this;
   }
@@ -29,7 +28,6 @@ public:
     full_message << "Check failed: " << expr_;
     std::string additional = stream_.str();
     if (!additional.empty()) {
-      fprintf(stderr, "debug: %s\n", additional.c_str());
       full_message << "; " << additional;
     }
     return ffi::Error(errc_, full_message.str());
@@ -63,3 +61,10 @@ private:
 #define FFI_RET_CHECK(expr)                                                    \
   if (auto _error = (expr); !_error.success())                                 \
   return _error
+
+#define FFI_CHECK_ALLOC(dest, expr)                                         \
+  void* dest = nullptr;                                  \ 
+  if (auto _opt = (expr); _opt.has_value())                                    \
+    dest = _opt.value();                                                       \
+  else                                                                         \
+    return CheckHelper(std::string(#expr))

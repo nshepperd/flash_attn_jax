@@ -44,10 +44,10 @@ rpm -ivh ~/rpmbuild/RPMS/noarch/gcc-dummy*.rpm --nodeps
 # Install CUDA
 
 dnf -y install \
-    cuda-compiler-${VER} \
-    cuda-minimal-build-${VER} \
-    cuda-nvtx-${VER} \
-    cuda-nvrtc-devel-${VER}
+    cuda-compiler-"${VER}" \
+    cuda-minimal-build-"${VER}" \
+    cuda-nvtx-"${VER}" \
+    cuda-nvrtc-devel-"${VER}"
 
     # cuda-libraries-devel-${VER} \
 # dnf clean all

@@ -1,4 +1,5 @@
 from functools import partial, wraps
+from typing import Tuple
 
 import numpy as np
 import jax
@@ -39,19 +40,12 @@ def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window
     dq, dk, dv = _flash_mha_bwd_hlo_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size)
     return dq, dk, dv
 
+
 # ==== HLO lowerings ====
 
 # Register functions defined in gpu_ops as custom call target for GPUs
 for _name, _value in flash_api.get_ffi_registrations().items():
     jax.ffi.register_ffi_target(_name, _value, platform="CUDA")
-
-def default_layouts(*shapes):
-    def row_major(shape):
-        return range(len(shape)-1, -1, -1)
-    return [row_major(shape) for shape in shapes]
-
-def value_layouts(*values):
-    return default_layouts(*[ir.RankedTensorType(x.type).shape for x in values])
 
 def ir_type_to_dtype(ty):
     for dtype in [np.dtype('bfloat16'), np.dtype('float16'), np.dtype('float32')]:

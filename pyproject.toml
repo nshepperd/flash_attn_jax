@@ -33,7 +33,9 @@ classifiers = [
 test = [
     "pytest>=7.0.0",
     "einops",
-    "jax[cuda12]",
+    "jax[cuda12]==0.7.*",
+    "ipykernel",
+    "pip"
 ]
 [project.urls]
 Homepage = "https://github.com/nshepperd/flash_attn_jax"

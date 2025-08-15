@@ -8,13 +8,16 @@ from functools import partial
 import einops
 
 def make_mask(R, C, is_causal, window_size):
+    q_idx = jnp.arange(R)[:, None]-R
+    k_idx = jnp.arange(C)[None, :]-C
     mask = jnp.ones([R,C], dtype=jnp.int32)
     if is_causal:
-        mask = jnp.tril(mask)
+        mask &= q_idx >= k_idx
     if window_size[0] != -1:
-        mask = jnp.triu(mask, -window_size[0])
+        mask &= k_idx >= q_idx - window_size[0] #jnp.triu(mask, -window_size[0])
     if window_size[1] != -1:
-        mask = jnp.tril(mask, window_size[1])
+        # mask = jnp.tril(mask, window_size[1])
+        mask &= k_idx <= q_idx + window_size[1]
     return mask
 
 def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):

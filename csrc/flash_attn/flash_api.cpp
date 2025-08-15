@@ -338,11 +338,61 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<int64_t>("window_size_right")
 );
 
+XLA_FFI_DEFINE_HANDLER(
+	mha_varlen_fwd, mha_varlen_fwd_impl,
+	ffi::Ffi::Bind()
+		.Ctx<ffi::PlatformStream<cudaStream_t>>()
+		.Ctx<ffi::ScratchAllocator>()
+		.Arg<ffi::AnyBuffer>() // q
+		.Arg<ffi::AnyBuffer>() // k
+		.Arg<ffi::AnyBuffer>() // v
+		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_q
+		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_k
+		.Arg<ffi::Buffer<ffi::S32>>() // seqused_k
+		.Ret<ffi::AnyBuffer>() // o
+		.Ret<ffi::Buffer<ffi::F32>>() // lse
+		.Attr<int>("max_seqlen_q")
+		.Attr<int>("max_seqlen_k")
+		.Attr<bool>("has_seqused_k")
+		.Attr<double>("softmax_scale")
+		.Attr<bool>("zero_tensors")
+		.Attr<bool>("is_causal")
+		.Attr<int64_t>("window_size_left")
+		.Attr<int64_t>("window_size_right")
+);
+
+XLA_FFI_DEFINE_HANDLER(
+	mha_varlen_bwd, mha_varlen_bwd_impl,
+	ffi::Ffi::Bind()
+		.Ctx<ffi::PlatformStream<cudaStream_t>>()
+		.Ctx<ffi::ScratchAllocator>()
+		.Arg<ffi::AnyBuffer>() // dout
+		.Arg<ffi::AnyBuffer>() // q
+		.Arg<ffi::AnyBuffer>() // k
+		.Arg<ffi::AnyBuffer>() // v
+		.Arg<ffi::AnyBuffer>() // o
+		.Arg<ffi::Buffer<ffi::F32>>() // lse
+		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_q
+		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_k
+		.Ret<ffi::AnyBuffer>() // dq
+		.Ret<ffi::AnyBuffer>() // dk
+		.Ret<ffi::AnyBuffer>() // dv
+		.Attr<int64_t>("max_seqlen_q")
+		.Attr<int64_t>("max_seqlen_k")
+		.Attr<float>("softmax_scale")
+		.Attr<bool>("zero_tensors")
+		.Attr<bool>("is_causal")
+		.Attr<int64_t>("window_size_left")
+		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("deterministic")
+);
 
 pybind11::dict FFIRegistrations() {
   pybind11::dict dict;
   dict["flash_mha_fwd"] = EncapsulateFfiCall(mha_fwd);
   dict["flash_mha_bwd"] = EncapsulateFfiCall(mha_bwd);
+  dict["flash_mha_varlen_fwd"] = EncapsulateFfiCall(mha_varlen_fwd);
+  dict["flash_mha_varlen_bwd"] = EncapsulateFfiCall(mha_varlen_bwd);
   return dict;
 }
 

@@ -27,7 +27,7 @@ string(REGEX REPLACE "--generate-code=arch=compute_[0-9]+,code=\\[?compute_[0-9]
 string(REGEX REPLACE "-gencode arch=compute_[0-9]+,code=sm_[0-9]+" "" 
        CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
 
-message(WARNING "CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
+message(STATUS "CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
 
 # Set up ccache
 find_program(CCACHE_PROGRAM ccache)
@@ -49,9 +49,11 @@ find_package(CUDAToolkit REQUIRED)
 
 
 # CUDA flags
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CUDA_FLAGS
     -O3
-    -std=c++20
     --use_fast_math
     --expt-relaxed-constexpr
     --expt-extended-lambda
