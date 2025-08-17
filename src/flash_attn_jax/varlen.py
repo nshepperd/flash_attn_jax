@@ -34,8 +34,8 @@ def _flash_mha_varlen_vjp_bwd(config, pack, dout):
         ends = seqlens_k[1:]
         lens = ends - starts
         zero = jnp.zeros(q.shape[0], dtype=jnp.int32)
-        ixl = jnp.arange(q.shape[0]) - jnp.cumsum(zero.at[ends].set(lens))
-        limits = jnp.cumsum(zero.at[starts].set(seqused_k-jnp.concatenate([jnp.array([0]), seqused_k[:-1]])))
+        ixl = jnp.arange(q.shape[0]) - jnp.cumsum(zero.at[ends].add(lens))
+        limits = jnp.cumsum(zero.at[starts].add(seqused_k-jnp.concatenate([jnp.array([0]), seqused_k[:-1]])))
         mask = (ixl < limits)
         v = v * mask[:, None, None]
         k = k * mask[:, None, None]

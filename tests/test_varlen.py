@@ -42,7 +42,7 @@ def check(ref_out, jax_out, out, margin=4):
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
 def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
     window_size = (3,3) if local else (-1,-1)
-    lens = [1, 2, 6, 10]
+    lens = [1, 2, 0, 6, 10]
     b = len(lens)
     total_seqlen = sum(lens)
 
@@ -91,7 +91,7 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
 def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
     window_size = (3,3) if local else (-1,-1)
-    lens = [1, 2, 4, 6, 8, 10]
+    lens = [1, 2, 0, 6, 10]
     b = len(lens)
     total_seqlen = sum(lens)
     if seqused_k_limit is not None and (causal or local):
