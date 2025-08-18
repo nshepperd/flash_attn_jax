@@ -32,15 +32,15 @@ def partition_fwd(softmax_scale, is_causal, window_size,
                   mesh: Mesh,
                   arg_shapes: List[jax.ShapeDtypeStruct],
                   result_shape: List[jax.ShapeDtypeStruct]):
-    result_shardings = [x.sharding for x in result_shape],
-    arg_shardings = [x.sharding for x in arg_shapes]
+    result_shardings = tuple([x.sharding for x in result_shape])
+    arg_shardings = tuple([x.sharding for x in arg_shapes])
 
     q_sharding = arg_shardings[0]
     k_sharding = arg_shardings[1]
     v_sharding = arg_shardings[2]
     assert q_sharding == k_sharding and q_sharding == v_sharding, "Only support q, k, v sharing the same sharding."
     if is_replicated(q_sharding):
-        result_sharding = (q_sharding, q_sharding)
+        result_shardings = (q_sharding, q_sharding)
     elif isinstance(q_sharding, NamedSharding):
         mesh = q_sharding.mesh
         [n,l,h,d] = q_sharding.spec
