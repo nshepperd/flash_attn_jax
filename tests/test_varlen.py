@@ -12,6 +12,7 @@ from jax.tree_util import tree_map
 import numpy as np
 import math
 import einops
+jax.config.update("jax_default_matmul_precision", "highest")
 
 from flash_attn_jax import flash_mha
 from flash_attn_jax.varlen import flash_mha_varlen

@@ -14,6 +14,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import tree_map
 jax.config.update("jax_traceback_filtering", "off")
+jax.config.update("jax_default_matmul_precision", "highest")
 
 from flash_attn_jax import flash_mha
 from .ref_mha import ref_mha

@@ -17,6 +17,7 @@ from jax.experimental.shard_map import shard_map
 from functools import partial
 import einops
 import math
+jax.config.update("jax_default_matmul_precision", "highest")
 
 from flash_attn_jax.ring_attention import ring_fwd, ring_bwd
 from .ref_mha import ref_fwd, ref_bwd
