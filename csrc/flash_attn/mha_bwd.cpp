@@ -234,6 +234,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
 
     if (seqlen_q > 0) {
         launch(params, stream);
+        FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
         // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
         FFI_CUDA_CHECK(cudaMemset(dq->untyped_data(), 0, dq->size_bytes()));
@@ -414,6 +415,7 @@ mha_varlen_bwd_impl(
 
     if (max_seqlen_q > 0) {
         launch(params, stream);
+        FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
         // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
         FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));

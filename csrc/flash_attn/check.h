@@ -39,32 +39,31 @@ private:
   std::ostringstream stream_;
 };
 
-#define FFI_CHECK(expr)                                                        \
-  static_assert(!std::is_same_v<decltype(expr), cudaError_t>,                  \
-                "Use FFI_CUDA_CHECK for CUDA error codes, not FFI_CHECK.");    \
-  if (!(expr))                                                                 \
+#define FFI_CHECK(expr)                                                                            \
+  static_assert(!std::is_same_v<decltype(expr), cudaError_t>,                                      \
+                "Use FFI_CUDA_CHECK for CUDA error codes, not FFI_CHECK.");                        \
+  if (!(expr))                                                                                     \
   return CheckHelper(#expr)
 
-#define FFI_CUDA_CHECK(expr)                                                   \
-  static_assert(std::is_same_v<decltype(expr), cudaError_t>,                   \
-                "Expect cudaError_t for FFI_CUDA_CHECK.");                     \
-  if (cudaError_t _cuda_check = (expr); _cuda_check != cudaSuccess)            \
-  return CheckHelper(std::string(#expr))                                       \
-         << " CUDA Error: " << cudaGetErrorString(_cuda_check)
+#define FFI_CUDA_CHECK(expr)                                                                       \
+  static_assert(std::is_same_v<decltype(expr), cudaError_t>,                                       \
+                "Expect cudaError_t for FFI_CUDA_CHECK.");                                         \
+  if (cudaError_t _cuda_check = (expr); _cuda_check != cudaSuccess)                                \
+  return CheckHelper(std::string(#expr)) << " CUDA Error: " << cudaGetErrorString(_cuda_check)
 
-#define FFI_CHECK_OPTIONAL(dest, expr)                                         \
-  if (auto _opt = (expr); _opt.has_value())                                    \
-    dest = _opt.value();                                                       \
-  else                                                                         \
+#define FFI_CHECK_OPTIONAL(dest, expr)                                                             \
+  if (auto _opt = (expr); _opt.has_value())                                                        \
+    dest = _opt.value();                                                                           \
+  else                                                                                             \
     return CheckHelper(std::string(#expr))
 
-#define FFI_RET_CHECK(expr)                                                    \
-  if (auto _error = (expr); !_error.success())                                 \
+#define FFI_RET_CHECK(expr)                                                                        \
+  if (auto _error = (expr); !_error.success())                                                     \
   return _error
 
-#define FFI_CHECK_ALLOC(dest, expr)                                         \
-  void* dest = nullptr;                                  \ 
-  if (auto _opt = (expr); _opt.has_value())                                    \
-    dest = _opt.value();                                                       \
-  else                                                                         \
+#define FFI_CHECK_ALLOC(dest, expr)                                                                \
+  void *dest = nullptr;                                                                            \
+  if (auto _opt = (expr); _opt.has_value())                                                        \
+    dest = _opt.value();                                                                           \
+  else                                                                                             \
     return CheckHelper(std::string(#expr))

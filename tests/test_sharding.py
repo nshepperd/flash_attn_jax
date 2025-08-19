@@ -171,6 +171,7 @@ def test_flash_fwd_sharded(seqlen, h, d, m, causal, local, dtype):
         out = flash((q,k,v))
         check(ref_out,ref16_out,out)
 
+    check_sharding(NamedSharding(mesh, P(None,None,None,None)), q, k, v)
     check_sharding(NamedSharding(mesh, P('x',None,None,None)), q, k, v)
     check_sharding(NamedSharding(mesh, P(None,None,'x',None)), q, k, v)
 
