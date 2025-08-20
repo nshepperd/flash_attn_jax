@@ -62,11 +62,16 @@ provider = "scikit_build_core.metadata.regex"
 input = "src/flash_attn_jax/__init__.py"
 
 [tool.cibuildwheel]
-# manylinux-x86_64-image = "quay.io/pypa/manylinux_2_28_x86_64:latest"
-before-all = "bash scripts/install-cuda-linux.sh"
-build = "cp312-manylinux_x86_64"
+archs = ["x86_64"]
+manylinux-x86_64-image = "pytorch/manylinux2_28-builder:cuda12.8"
+# before-all = "bash scripts/install-cuda-linux.sh"
+build = "cp{311,312,313}-manylinux_x86_64"
 repair-wheel-command = "auditwheel repair --exclude=libcudart.so* -w {dest_dir} {wheel}"
 
-[tool.cibuildwheel.environment]
-PATH="/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/cuda/bin:$PATH"
-CUDA_HOME="/usr/local/cuda"
+# [tool.cibuildwheel.environment]
+# PATH="/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/cuda/bin:$PATH"
+# CUDA_HOME="/usr/local/cuda"
+
+# [[tool.cibuildwheel.overrides]]
+# select = "cp313-*"
+# manylinux-x86_64-image = "sameli/manylinux_2_34_x86_64_cuda_12.8:latest"
