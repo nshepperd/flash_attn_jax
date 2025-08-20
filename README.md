@@ -9,7 +9,7 @@ Please cite (see below) and credit FlashAttention if you use it.
 ## Installation
 
 Requirements:
-- CUDA 12.8 and above.
+- CUDA 12.3 and above.
 - Linux. Same story as with the pytorch repo. I haven't tested compilation of the jax bindings on windows.
 - JAX >= `0.5.*`. The custom call api changed in this version.
 

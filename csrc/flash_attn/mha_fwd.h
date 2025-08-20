@@ -10,16 +10,25 @@
 
 namespace ffi = xla::ffi;
 
-ffi::Error mha_fwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
-                   ffi::AnyBuffer q, ffi::AnyBuffer k, ffi::AnyBuffer v,
-                   ffi::Result<ffi::AnyBuffer> o,
-                   ffi::ResultBuffer<ffi::F32> lse, double softmax_scale,
-                   bool is_causal, int64_t window_size_left, int64_t window_size_right);
+ffi::Error mha_fwd_impl(
+    cudaStream_t stream, 
+    ffi::ScratchAllocator scratch,
+    int32_t device,
+    ffi::AnyBuffer q,
+    ffi::AnyBuffer k,
+    ffi::AnyBuffer v,
+    ffi::Result<ffi::AnyBuffer> o,
+    ffi::ResultBuffer<ffi::F32> lse,
+    double softmax_scale,
+    bool is_causal,
+    int64_t window_size_left,
+    int64_t window_size_right);
 
 ffi::Error
 mha_varlen_fwd_impl(
     cudaStream_t stream,
     ffi::ScratchAllocator scratch,
+    int32_t device,
     ffi::AnyBuffer q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i

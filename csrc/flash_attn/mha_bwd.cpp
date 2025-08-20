@@ -110,6 +110,7 @@ void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
 }
 
 ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
+                        int32_t device,
                         ffi::AnyBuffer dout, // batch_size x seqlen_q x num_heads x head_size_og
                         ffi::AnyBuffer q,    // batch_size x seqlen_q x num_heads x head_size
                         ffi::AnyBuffer k,    // batch_size x seqlen_k x num_heads_k x head_size
@@ -121,9 +122,8 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
                         ffi::Result<ffi::AnyBuffer> dv,    // batch_size x seqlen_k x num_heads_k x head_size
                         double softmax_scale, bool is_causal,
                         int64_t window_size_left, int64_t window_size_right) {
-	int device, major, minor, sm_count;
-    FFI_CUDA_CHECK(cudaStreamGetDevice(stream, &device));
-	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+	int major, minor, sm_count;
+    FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
 
@@ -249,6 +249,7 @@ ffi::Error
 mha_varlen_bwd_impl(
     cudaStream_t stream,
     ffi::ScratchAllocator scratch,
+    int32_t device,
     ffi::AnyBuffer dout,  // total_q x num_heads, x head_size
     ffi::AnyBuffer q,     // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer k,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -270,8 +271,7 @@ mha_varlen_bwd_impl(
     bool deterministic) {
 
     if (is_causal) { window_size_right = 0; }
-	int device, major, minor, sm_count;
-    FFI_CUDA_CHECK(cudaStreamGetDevice(stream, &device));
+	int major, minor, sm_count;
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));

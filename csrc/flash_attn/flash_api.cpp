@@ -307,6 +307,7 @@ XLA_FFI_DEFINE_HANDLER(
 	ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
 		.Ctx<ffi::ScratchAllocator>()
+		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>()
 		.Arg<ffi::AnyBuffer>()
 		.Arg<ffi::AnyBuffer>()
@@ -323,6 +324,7 @@ XLA_FFI_DEFINE_HANDLER(
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
 		.Ctx<ffi::ScratchAllocator>()
+		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // dout
 		.Arg<ffi::AnyBuffer>() // q
 		.Arg<ffi::AnyBuffer>() // k
@@ -343,6 +345,7 @@ XLA_FFI_DEFINE_HANDLER(
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
 		.Ctx<ffi::ScratchAllocator>()
+		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // q
 		.Arg<ffi::AnyBuffer>() // k
 		.Arg<ffi::AnyBuffer>() // v
@@ -366,6 +369,7 @@ XLA_FFI_DEFINE_HANDLER(
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
 		.Ctx<ffi::ScratchAllocator>()
+		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // dout
 		.Arg<ffi::AnyBuffer>() // q
 		.Arg<ffi::AnyBuffer>() // k

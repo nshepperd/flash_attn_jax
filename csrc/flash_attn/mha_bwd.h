@@ -10,6 +10,7 @@
 namespace ffi = xla::ffi;
 
 ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
+                        int32_t device,
                         ffi::AnyBuffer dout, ffi::AnyBuffer q, ffi::AnyBuffer k,
                         ffi::AnyBuffer v, ffi::AnyBuffer o,
                         ffi::Buffer<ffi::F32> lse, ffi::Result<ffi::AnyBuffer> dq,
@@ -21,6 +22,7 @@ ffi::Error
 mha_varlen_bwd_impl(
     cudaStream_t stream,
     ffi::ScratchAllocator scratch,
+    int32_t device,
     ffi::AnyBuffer dout,  // total_q x num_heads, x head_size
     ffi::AnyBuffer q,     // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer k,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
