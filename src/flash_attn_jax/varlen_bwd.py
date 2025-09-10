@@ -16,6 +16,8 @@ from einops import rearrange
 import einops
 import math
 
+from flash_attn_jax.util import round_multiple
+
 # ==== Register primitives ====
 
 _flash_mha_varlen_bwd_p = Primitive("flash_mha_varlen_bwd")
@@ -44,10 +46,10 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_bw
     # int window_size_left,
     # int window_size_right,
     # const bool deterministic)
-def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k,
+def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, zero_tensors=False, is_causal: bool = False,
-                         window_size: tuple = (-1, -1), deterministic: bool = False):
+                         window_size: tuple = (-1, -1), deterministic: bool):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
@@ -99,9 +101,27 @@ def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, se
         dk_shape = [totalk, h, d+dpad]
         dv_shape = [totalk, h, d+dpad]
 
-        out_types = [jax.ShapeDtypeStruct(dq_shape, q_dtype), 
-                        jax.ShapeDtypeStruct(dk_shape, k_dtype),
-                        jax.ShapeDtypeStruct(dv_shape, v_dtype)]
+        # Calculate scratch array shapes
+        seqlen_q_rounded = round_multiple(max_seqlen_q, 128)
+        d_rounded = round_multiple(d+dpad, 32)
+        softmax_d_shape = (b, h, seqlen_q_rounded)
+        
+        # Calculate nsplits for deterministic mode (varlen-specific)
+        sm_count = 114  # H100, should ideally get this from device query
+        if deterministic:
+            nsplits = max(1, (sm_count + b * h - 1) // (b * h))
+            dq_accum_shape = (nsplits, totalq + 128 * b, h, d_rounded)  # varlen-specific sizing with splits
+        else:
+            dq_accum_shape = (totalq + 128 * b, h, d_rounded)  # varlen-specific sizing
+        
+        rng_state_shape = (2,)
+
+        out_types = [jax.ShapeDtypeStruct(dq_shape, q_dtype),              # dq
+                        jax.ShapeDtypeStruct(dk_shape, k_dtype),           # dk
+                        jax.ShapeDtypeStruct(dv_shape, v_dtype),           # dv
+                        jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32), # softmax_d
+                        jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),  # dq_accum
+                        jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]   # rng_state
 
         kwargs = dict(
             max_seqlen_q=mlir.i64_attr(max_seqlen_q),
@@ -118,8 +138,8 @@ def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, se
             result_shape_dtypes=out_types,
             has_side_effect=False,
             input_layouts=[None]*8, # default row major
-            output_layouts=[None]*3,
-            )(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs)
+            output_layouts=[None]*6,
+            )(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs)[:3]  # Only return first 3 outputs (dq, dk, dv)
         
         if dpad > 0:
             dq = dq[:,:,:d]

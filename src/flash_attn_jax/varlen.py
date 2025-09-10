@@ -21,8 +21,12 @@ from .varlen_fwd import flash_mha_varlen_fwd
 
 @partial(jax.custom_vjp, nondiff_argnums=(6,))
 def _flash_mha_varlen_vjp(q: jax.Array,k: jax.Array,v: jax.Array,seqlens_q: jax.Array, seqlens_k: jax.Array, seqused_k: jax.Array, config: dict):
+    config = dict(config)  # make a copy
+    config.pop('deterministic', None)  # not used in fwd
     return flash_mha_varlen_fwd(q,k,v, seqlens_q, seqlens_k, seqused_k, **config)[0]
 def _flash_mha_varlen_vjp_fwd(q,k,v,seqlens_q, seqlens_k, seqused_k, config):
+    config = dict(config)  # make a copy
+    config.pop('deterministic', None)  # not used in fwd
     out, lse = flash_mha_varlen_fwd(q,k,v, seqlens_q, seqlens_k, seqused_k, **config)
     return out, (q,k,v,seqlens_q, seqlens_k, seqused_k, out,lse)
 def _flash_mha_varlen_vjp_bwd(config, pack, dout):

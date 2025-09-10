@@ -325,7 +325,6 @@ XLA_FFI_DEFINE_HANDLER(
 	mha_bwd, mha_bwd_impl,
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::ScratchAllocator>()
 		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // dout
 		.Arg<ffi::AnyBuffer>() // q
@@ -336,10 +335,14 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::AnyBuffer>() // dq
 		.Ret<ffi::AnyBuffer>() // dk
 		.Ret<ffi::AnyBuffer>() // dv
+		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
+		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
+		.Ret<ffi::Buffer<ffi::S64>>() // rng_state
 		.Attr<double>("softmax_scale")
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
 		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("deterministic")
 );
 
 XLA_FFI_DEFINE_HANDLER(
@@ -372,7 +375,6 @@ XLA_FFI_DEFINE_HANDLER(
 	mha_varlen_bwd, mha_varlen_bwd_impl,
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::ScratchAllocator>()
 		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // dout
 		.Arg<ffi::AnyBuffer>() // q
@@ -385,6 +387,9 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::AnyBuffer>() // dq
 		.Ret<ffi::AnyBuffer>() // dk
 		.Ret<ffi::AnyBuffer>() // dv
+		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
+		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
+		.Ret<ffi::Buffer<ffi::S64>>() // rng_state
 		.Attr<int64_t>("max_seqlen_q")
 		.Attr<int64_t>("max_seqlen_k")
 		.Attr<float>("softmax_scale")

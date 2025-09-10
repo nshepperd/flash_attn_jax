@@ -31,7 +31,7 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
                          window_size: tuple = (-1, -1),
-                         zero_tensors: bool = False, deterministic: bool = False):
+                         zero_tensors: bool = False):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:

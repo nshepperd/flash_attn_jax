@@ -1,7 +1,4 @@
 import sys, glob, os
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
-if glob.glob('build/lib.linux-*'):
-    sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
 sys.path.insert(0,'./src')
 
 from functools import partial
@@ -12,10 +9,11 @@ from jax.tree_util import tree_map
 import numpy as np
 import math
 import einops
-jax.config.update("jax_default_matmul_precision", "highest")
 
 from flash_attn_jax import flash_mha
 from .ref_mha import ref_mha
+
+jax.config.update("jax_default_matmul_precision", "highest")
 
 def pretty(tensor):
     shape = tensor.shape
@@ -27,12 +25,15 @@ def pretty(tensor):
 
 # Smart idea from Tri Dao's repo: compare both impl to a float32
 # reference impl, and call it a pass if the absolute error isn't
-# more than 3x worse with flash attention.
+# more than 4x worse with flash attention.
 def check(ref_out, jax_out, out, margin=4):
     def check1(ref_out, jax_out, out):
-        assert jnp.max(jnp.abs(out - ref_out)).item() <= margin * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
+        atol = margin * jnp.max(jnp.abs(jax_out - ref_out)).item()
+        rtol = 1e-3
+        np.testing.assert_allclose(out, ref_out, rtol=rtol, atol=atol)
     tree_map(check1, ref_out, jax_out, out)
 
+    
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])

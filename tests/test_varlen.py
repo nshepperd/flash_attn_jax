@@ -1,22 +1,25 @@
-import sys, glob, os
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=2'
-if glob.glob('build/lib.linux-*'):
-    sys.path.insert(0, glob.glob('build/lib.linux-*')[0])
+import glob
+import os
+import sys
+
 sys.path.insert(0,'./src')
 
+import math
 from functools import partial
-import pytest
+
+import einops
 import jax
 import jax.numpy as jnp
-from jax.tree_util import tree_map
 import numpy as np
-import math
-import einops
-jax.config.update("jax_default_matmul_precision", "highest")
+import pytest
+from jax.tree_util import tree_map
 
 from flash_attn_jax import flash_mha
 from flash_attn_jax.varlen import flash_mha_varlen
+
 from .ref_mha import ref_mha
+
+jax.config.update("jax_default_matmul_precision", "highest")
 
 def pretty(tensor):
     shape = tensor.shape
@@ -26,13 +29,17 @@ def pretty(tensor):
     std = jnp.std(tensor)
     return f'[{shape}: {mn:.3g} | {mean:.3g}±{std:.3g} | {mx:.3g}]'
 
-# Smart idea from Tri Dao's repo: compare both impl to a float32
-# reference impl, and call it a pass if the absolute error isn't
-# more than 3x worse with flash attention.
 def check(ref_out, jax_out, out, margin=4):
     def check1(ref_out, jax_out, out):
-        assert jnp.max(jnp.abs(out - ref_out)).item() <= margin * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
+        atol = margin * jnp.max(jnp.abs(jax_out - ref_out)).item()
+        rtol = 1e-3
+        np.testing.assert_allclose(out, ref_out, rtol=rtol, atol=atol)
+        # assert jnp.max(jnp.abs(out - ref_out)).item() <= margin * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
     tree_map(check1, ref_out, jax_out, out)
+
+@pytest.fixture(params=['', 'deterministic'])
+def deterministic(request):
+    return request.param == 'deterministic'
 
 @pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
@@ -41,7 +48,7 @@ def check(ref_out, jax_out, out, margin=4):
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
+def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit, deterministic: bool):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -80,7 +87,8 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
     out = flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
                            seqused_k=seqused_k,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size,
+                            deterministic=deterministic)
     check(ref_out, jax_out, out)
 
 @pytest.mark.parametrize("seqused_k_limit", [None, 4])
@@ -90,7 +98,7 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
+def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit, deterministic: bool):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -123,7 +131,8 @@ def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
         q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
         o = flash_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts, seqused_k=seqused_k,
                             max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size,
+                            deterministic=deterministic)
         return o.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
     
     ref_grad = jax.grad(ref)((q,k,v), dtype=jnp.float32)

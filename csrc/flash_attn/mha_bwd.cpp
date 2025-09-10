@@ -109,7 +109,7 @@ void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
     });
 }
 
-ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
+ffi::Error mha_bwd_impl(cudaStream_t stream,
                         int32_t device,
                         ffi::AnyBuffer dout, // batch_size x seqlen_q x num_heads x head_size_og
                         ffi::AnyBuffer q,    // batch_size x seqlen_q x num_heads x head_size
@@ -120,8 +120,11 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
                         ffi::Result<ffi::AnyBuffer> dq,    // batch_size x seqlen_q x num_heads x head_size
                         ffi::Result<ffi::AnyBuffer> dk,    // batch_size x seqlen_k x num_heads_k x head_size
                         ffi::Result<ffi::AnyBuffer> dv,    // batch_size x seqlen_k x num_heads_k x head_size
+                        ffi::ResultBuffer<ffi::F32> softmax_d,  // batch_size x num_heads x seqlen_q_rounded
+                        ffi::ResultBuffer<ffi::F32> dq_accum,   // batch_size x seqlen_q_rounded x num_heads x head_size_rounded
+                        ffi::ResultBuffer<ffi::S64> rng_state,  // 2
                         double softmax_scale, bool is_causal,
-                        int64_t window_size_left, int64_t window_size_right) {
+                        int64_t window_size_left, int64_t window_size_right, bool deterministic) {
 	int major, minor, sm_count;
     FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
@@ -174,25 +177,16 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
     // TODO: change later, for now set to true for simplicity
     bool loop = true;
 
-    void* softmax_d = nullptr;
-    FFI_CHECK_OPTIONAL(softmax_d, scratch.Allocate(batch_size * num_heads * seqlen_q_rounded * 4, 4))
-        << "Failed to allocate memory for softmax_d";
-    void* dq_accum = nullptr;
+    // Use XLA-provided buffers instead of scratch allocation
+    void* softmax_d_ptr = softmax_d->untyped_data();
+    void* dq_accum_ptr = nullptr;
     void* dk_accum = nullptr;
 	void* dv_accum = nullptr;
-    bool deterministic = false;
+    
     if (loop) {
-        if (!deterministic) {
-            FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate(batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, 4))
-                << "Failed to allocate memory for dq_accum";
-            FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum, 0, batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, stream));
-        } else {
-            const int nsplits = (sm_count + batch_size * num_heads - 1) / (batch_size * num_heads);
-            FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate(nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, 4))
-                << "Failed to allocate memory for dq_accum";
-			// previously allocated with torch.zeros, so i guess we need to zero it
-			FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum, 0, nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, stream));
-        }
+        dq_accum_ptr = dq_accum->untyped_data();
+        // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
+        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
     }
 
 
@@ -214,13 +208,13 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
                      dout.untyped_data(), dq->untyped_data(), dk_expanded, dv_expanded,
                      nullptr,
                      nullptr,
-                     loop ? dq_accum : nullptr,
+                     loop ? dq_accum_ptr : nullptr,
                      // loop ? dk_accum.data_ptr() : nullptr,
                      // loop ? dv_accum.data_ptr() : nullptr,
                      nullptr,
                      nullptr,
                      lse.untyped_data(),
-                     softmax_d,
+                     softmax_d_ptr,
                      0.0,
                      softmax_scale,
                      window_size_left,
@@ -230,18 +224,18 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
 
     auto launch = &run_mha_bwd;
 
-    FFI_CHECK_OPTIONAL(*(void**)&params.rng_state, scratch.Allocate(2 * 8, 8))
-        << "Failed to allocate memory for RNG state";
+    // Use XLA-provided rng_state buffer
+    params.rng_state = reinterpret_cast<uint64_t*>(rng_state->untyped_data());
 
-    if (seqlen_q > 0) {
-        launch(params, stream);
-        FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
-    } else {
-        // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(dk->untyped_data(), 0, dk->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(dv->untyped_data(), 0, dv->size_bytes(), stream));
-    }
+    FFI_CHECK(seqlen_q > 0);
+    launch(params, stream);
+    //     FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
+    // } else {
+    //     // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dk->untyped_data(), 0, dk->size_bytes(), stream));
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dv->untyped_data(), 0, dv->size_bytes(), stream));
+    // }
 
     return ffi::Error();
 }
@@ -249,7 +243,6 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
 ffi::Error
 mha_varlen_bwd_impl(
     cudaStream_t stream,
-    ffi::ScratchAllocator scratch,
     int32_t device,
     ffi::AnyBuffer dout,  // total_q x num_heads, x head_size
     ffi::AnyBuffer q,     // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
@@ -262,13 +255,16 @@ mha_varlen_bwd_impl(
     ffi::Result<ffi::AnyBuffer> dq,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::Result<ffi::AnyBuffer> dk,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::Result<ffi::AnyBuffer> dv,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::ResultBuffer<ffi::F32> softmax_d,  // batch_size x num_heads x seqlen_q_rounded
+    ffi::ResultBuffer<ffi::F32> dq_accum,   // (total_q + 128 * batch_size) x num_heads x head_size_rounded
+    ffi::ResultBuffer<ffi::S64> rng_state,  // 2
     int64_t max_seqlen_q,
     int64_t max_seqlen_k,          // max sequence length to choose the kernel
     float softmax_scale,
     bool zero_tensors,
     bool is_causal,
     int64_t window_size_left,
-    int64_t window_size_right,
+    int64_t window_size_right, 
     bool deterministic) {
 
     if (is_causal) { window_size_right = 0; }
@@ -341,10 +337,11 @@ mha_varlen_bwd_impl(
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing
 
-    FFI_CHECK_ALLOC(softmax_d, scratch.Allocate(batch_size * num_heads * seqlen_q_rounded * 4, 4))
-        << "Failed to allocate softmax_d";
-    void* dq_accum = nullptr;
+    // Use XLA-provided buffers instead of scratch allocation
+    void* softmax_d_ptr = softmax_d->untyped_data();
+    void* dq_accum_ptr = nullptr;
     int dq_accum_split_stride = 0;
+    
     if (loop) {
         // We don't want to allocate dq_accum of size (batch, seqlen_q_rounded, num_heads, head_size_rounded)
         // because that would be too large if there is a very long sequence and the rest of the sequences are short.
@@ -354,14 +351,12 @@ mha_varlen_bwd_impl(
         // cu_seqlens[i + 1] * 128 * i - 1. This ensures that the i-th sequence and (i + 1)-th sequence will
         // be at least 128 apart. It's ok for us to do atomicAdds up to 128 rows beyond what we're normally
         // allowed to do. So we won't have to do any bound checking, and performance should stay the same.
-        if (!deterministic) {
-            FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate((total_q + 128 * batch_size) * num_heads * head_size_rounded * 4, 4))
-                << "Failed to allocate memory for dq_accum";
-        } else {
-            const int nsplits = (sm_count + batch_size * num_heads - 1) / (batch_size * num_heads);
-            FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate(nsplits * (total_q + 128 * batch_size) * num_heads * head_size_rounded * 4, 4))
-                << "Failed to allocate memory for dq_accum";
-            FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum, 0, nsplits * (total_q + 128 * batch_size) * num_heads * head_size_rounded * 4, stream));
+        dq_accum_ptr = dq_accum->untyped_data();
+        // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
+        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        
+        // Set split stride for deterministic mode
+        if (deterministic) {
             dq_accum_split_stride = (total_q + 128 * batch_size) * num_heads * head_size_rounded;
         }
     }
@@ -395,11 +390,11 @@ mha_varlen_bwd_impl(
                      dout.untyped_data(), dq->untyped_data(), dk->untyped_data(), dv->untyped_data(),
                      cu_seqlens_q.untyped_data(),
                      cu_seqlens_k.untyped_data(),
-                     loop ? dq_accum : nullptr,
+                     loop ? dq_accum_ptr : nullptr,
                      nullptr,
                      nullptr,
                      lse.untyped_data(),
-                     softmax_d,
+                     softmax_d_ptr,
                      0.0,
                      softmax_scale,
                      window_size_left,
@@ -409,21 +404,14 @@ mha_varlen_bwd_impl(
 
     auto launch = &run_mha_bwd;
 
-    FFI_CHECK_OPTIONAL(*(void**)&params.rng_state, scratch.Allocate(2 * 8, 8))
-        << "Failed to allocate memory for RNG state";
+    // Use XLA-provided rng_state buffer
+    params.rng_state = reinterpret_cast<uint64_t*>(rng_state->untyped_data());
 
     params.alibi_slopes_ptr = nullptr;
 
-    if (max_seqlen_q > 0) {
-        launch(params, stream);
-        FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
-    } else {
-        // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(dk->untyped_data(), 0, dk->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(dv->untyped_data(), 0, dv->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(softmax_d, 0, batch_size * num_heads * seqlen_q_rounded * 4, stream));
-    }
+    FFI_CHECK(max_seqlen_q > 0);
+    launch(params, stream);
+
     // // For MQA/GQA we need to sum dK and dV across the groups
     // if (num_heads_k != num_heads) {
     //     at::sum_out(dk, at::reshape(dk_expanded, {total_k, num_heads_k, num_heads / num_heads_k, head_size}), {2});

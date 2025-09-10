@@ -37,8 +37,8 @@ def _flash_mha_fwd_hlo(q, k, v, softmax_scale, is_causal, window_size):
     out, lse = _flash_mha_fwd_hlo_p.bind(q, k, v, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size)
     return out, lse
 
-def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size):
-    dq, dk, dv = _flash_mha_bwd_hlo_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size)
+def _flash_mha_bwd_hlo(dout, q, k, v, out, lse, softmax_scale, is_causal, window_size, deterministic=False):
+    dq, dk, dv = _flash_mha_bwd_hlo_p.bind(dout, q, k, v, out, lse, softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size, deterministic=deterministic)
     return dq, dk, dv
 
 
@@ -134,7 +134,7 @@ mlir.register_lowering(
     platform="gpu",
 )
 
-def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None, is_causal=None, window_size=None):
+def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None, is_causal=None, window_size=None, deterministic=False):
     dout_type = ir.RankedTensorType(dout.type).element_type
     q_type = ir.RankedTensorType(q.type).element_type
     k_type = ir.RankedTensorType(k.type).element_type
@@ -178,20 +178,40 @@ def _flash_mha_bwd_hlo_lowering(ctx, dout, q, k, v, out, lse, softmax_scale=None
 
         # For MQA/GQA, hq != hk, but we pass a hq sized output tensor to the kernel and sum over it afterwards to reduce the size.
         jax_dtype = jnp.bfloat16 if type(dtype) == ir.BF16Type else jnp.float16
-        out_types = [jax.ShapeDtypeStruct((n, lq, hq, d+dpad), jax_dtype),
-                    jax.ShapeDtypeStruct((n, lk, hq, d+dpad), jax_dtype),
-                    jax.ShapeDtypeStruct((n, lk, hq, d+dpad), jax_dtype)]
+        
+        # Calculate scratch array shapes
+        lq_rounded = round_multiple(lq, 128)
+        d_rounded = round_multiple(d+dpad, 32)
+        softmax_d_shape = (n, hq, lq_rounded)
+        
+        # Calculate nsplits for deterministic mode
+        sm_count = 114  # H100, should ideally get this from device query
+        if deterministic:
+            nsplits = max(1, (sm_count + n * hq - 1) // (n * hq))
+            dq_accum_shape = (nsplits, n, lq_rounded, hq, d_rounded)
+        else:
+            dq_accum_shape = (n, lq_rounded, hq, d_rounded)
+        
+        rng_state_shape = (2,)
+        
+        out_types = [jax.ShapeDtypeStruct((n, lq, hq, d+dpad), jax_dtype),  # dq
+                    jax.ShapeDtypeStruct((n, lk, hq, d+dpad), jax_dtype),   # dk
+                    jax.ShapeDtypeStruct((n, lk, hq, d+dpad), jax_dtype),   # dv
+                    jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32),     # softmax_d
+                    jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),      # dq_accum
+                    jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]       # rng_state
 
         dq, dk, dv = jax.ffi.ffi_call(
             "flash_mha_bwd", 
             result_shape_dtypes=out_types,
             has_side_effect=False,
             input_layouts=[None]*6, # default row major
-            output_layouts=[None]*3,
+            output_layouts=[None]*6,
             )(dout, q, k, v, out, lse, softmax_scale=softmax_scale,
             is_causal=is_causal,
             window_size_left=window_size[0],
-            window_size_right=window_size[1])
+            window_size_right=window_size[1],
+            deterministic=deterministic)[:3]  # Only return first 3 outputs (dq, dk, dv)
 
         if hq != hk:
             assert hq > hk and hq % hk == 0
@@ -230,7 +250,7 @@ def _flash_mha_fwd_abstract(q, k, v, softmax_scale=None, is_causal=None, window_
 _flash_mha_fwd_hlo_p.def_abstract_eval(_flash_mha_fwd_abstract)
 
 
-def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, is_causal=None, window_size=None):
+def _flash_mha_bwd_abstract(dout, q, k, v, out, lse, softmax_scale=None, is_causal=None, window_size=None, deterministic=False):
     dout_dtype = dtypes.canonicalize_dtype(dout.dtype)
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
