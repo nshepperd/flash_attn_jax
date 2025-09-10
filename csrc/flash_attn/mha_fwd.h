@@ -12,13 +12,15 @@ namespace ffi = xla::ffi;
 
 ffi::Error mha_fwd_impl(
     cudaStream_t stream, 
-    ffi::ScratchAllocator scratch,
     int32_t device,
     ffi::AnyBuffer q,
     ffi::AnyBuffer k,
     ffi::AnyBuffer v,
     ffi::Result<ffi::AnyBuffer> o,
     ffi::ResultBuffer<ffi::F32> lse,
+    ffi::ResultBuffer<ffi::F32> oaccum,
+    ffi::ResultBuffer<ffi::F32> lseaccum,
+    ffi::ResultBuffer<ffi::S64> rng_state,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
@@ -27,7 +29,6 @@ ffi::Error mha_fwd_impl(
 ffi::Error
 mha_varlen_fwd_impl(
     cudaStream_t stream,
-    ffi::ScratchAllocator scratch,
     int32_t device,
     ffi::AnyBuffer q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -37,6 +38,9 @@ mha_varlen_fwd_impl(
     ffi::Buffer<ffi::S32> seqused_k, // b. If given, only this many elements of each batch element's keys are used.
     ffi::Result<ffi::AnyBuffer> out, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::ResultBuffer<ffi::F32> lse, // total_q x num_heads
+    ffi::ResultBuffer<ffi::F32> oaccum,
+    ffi::ResultBuffer<ffi::F32> lseaccum,
+    ffi::ResultBuffer<ffi::S64> rng_state,
     int max_seqlen_q,
     int max_seqlen_k,
     bool has_seqused_k,

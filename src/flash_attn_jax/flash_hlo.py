@@ -17,6 +17,7 @@ import einops
 import math
 
 import flash_attn_jax_lib.flash_api as flash_api
+from flash_attn_jax.util import num_splits_heuristic, round_multiple
 
 # jax.ffi.ffi_call()
 
@@ -71,6 +72,25 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
     assert isinstance(window_size, (tuple, list))
 
     def fwd(q, k, v):
+        #         // This needs to match with run_mha_fwd_splitkv_dispatch
+        # const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
+        # const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
+        # // Technically kBlockM = 64 only for the splitKV kernels, not the standard kernel.
+        # // In any case we don't expect seqlen_q to be larger than 64 for inference.
+        # const int num_m_blocks = (max_seqlen_q + 64 - 1) / 64;
+        if d <= 64:
+            block_n = 256
+        elif d <= 128:
+            block_n = 128
+        else:
+            block_n = 64
+        num_n_blocks = max(1, (lk + block_n - 1) // block_n)
+        num_m_blocks = max(1, (l + 64 - 1) // 64)
+        sm_count = 114 # H100
+        num_splits = num_splits_heuristic(n * h * num_m_blocks, sm_count, num_n_blocks, 128)
+        lseaccum_shape = (num_splits, n, h, l)
+        oaccum_shape = (num_splits, n, l, h, round_multiple(d, 32))
+
         dpad = (8 - d%8) % 8
         if dpad > 0:
             # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
@@ -85,18 +105,23 @@ def _flash_mha_fwd_hlo_lowering(ctx, q, k, v, softmax_scale=None, is_causal=Fals
         lse_shape = [n, h, l]
         
         jax_dtype = jnp.bfloat16 if type(element_type) == ir.BF16Type else jnp.float16
-        out_types = [jax.ShapeDtypeStruct(o_shape, jax_dtype), jax.ShapeDtypeStruct(lse_shape, jnp.float32)]
+        out_types = [jax.ShapeDtypeStruct(o_shape, jax_dtype), 
+                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+                     jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+                     jax.ShapeDtypeStruct((2,), jnp.int64),
+                     ]
 
         o, lse = jax.ffi.ffi_call(
-            "flash_mha_fwd", 
+            "flash_mha_fwd",
             result_shape_dtypes=out_types,
             has_side_effect=False,
             input_layouts=[None, None, None], # default row major
-            output_layouts=[None, None],
+            output_layouts=[None, None, None, None, None],
             )(q, k, v, softmax_scale=softmax_scale,
             is_causal=is_causal,
             window_size_left=window_size[0],
-            window_size_right=window_size[1])
+            window_size_right=window_size[1])[:2]
 
         if dpad > 0:
             o = o[:,:,:,:d]

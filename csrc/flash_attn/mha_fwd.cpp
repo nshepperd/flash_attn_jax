@@ -2,6 +2,7 @@
  * Copyright (c) 2024, Tri Dao.
  ******************************************************************************/
 
+#include <cstdint>
 #include <stddef.h>
 #include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
@@ -31,13 +32,15 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split
 
 
 ffi::Error mha_fwd_impl(cudaStream_t stream, 
-    ffi::ScratchAllocator scratch, 
     int32_t device,
     ffi::AnyBuffer q, 
     ffi::AnyBuffer k,
     ffi::AnyBuffer v,
     ffi::Result<ffi::AnyBuffer> o,
     ffi::ResultBuffer<ffi::F32> lse,
+    ffi::ResultBuffer<ffi::F32> oaccum,
+    ffi::ResultBuffer<ffi::F32> lseaccum,
+    ffi::ResultBuffer<ffi::S64> rng_state,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
@@ -123,15 +126,16 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
 	int sm_count;
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
 
-    FFI_RET_CHECK(set_params_splitkv(&scratch, params, batch_size, num_heads,
+    int max_splits = oaccum->dimensions()[0];
+    FFI_RET_CHECK(set_params_splitkv(params, batch_size, num_heads,
                        head_size, seqlen_k, seqlen_q,
                        head_size_rounded, 0.0, /*num_splits*/0, sm_count,
-                        dtype));
+                        dtype, max_splits, oaccum->untyped_data(), lseaccum->untyped_data()));
 
     int64_t counter_offset = params.b * params.h * 32;
-    auto rng_state = scratch.Allocate(2 * sizeof(uint64_t), 8); // 2 * float64
-    FFI_CHECK(rng_state.has_value()) << "Failed to allocate memory for RNG state";
-    params.rng_state = reinterpret_cast<uint64_t*>(rng_state.value());
+    // auto rng_state = scratch.Allocate(2 * sizeof(uint64_t), 8); // 2 * float64
+    // FFI_CHECK(rng_state.has_value()) << "Failed to allocate memory for RNG state";
+    params.rng_state = reinterpret_cast<uint64_t*>(rng_state->untyped_data());
 
     // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
     // auto rng_state = torch::empty({2}, options.dtype(torch::kInt64));
@@ -143,7 +147,7 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
 
     if (seqlen_k > 0) {
 		run_mha_fwd(params, stream);
-		FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
+		// FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
 		FFI_CHECK(false) << "seqlen_k is zero";
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
@@ -157,7 +161,6 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
 ffi::Error
 mha_varlen_fwd_impl(
     cudaStream_t stream,
-    ffi::ScratchAllocator scratch,
     int32_t device,
     ffi::AnyBuffer q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     ffi::AnyBuffer k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -167,6 +170,9 @@ mha_varlen_fwd_impl(
     ffi::Buffer<ffi::S32> seqused_k, // b. If given, only this many elements of each batch element's keys are used.
     ffi::Result<ffi::AnyBuffer> out, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::ResultBuffer<ffi::F32> lse, // batch_size x num_heads x max_seqlen_q
+    ffi::ResultBuffer<ffi::F32> oaccum,
+    ffi::ResultBuffer<ffi::F32> lseaccum,
+    ffi::ResultBuffer<ffi::S64> rng_state,
     int max_seqlen_q,
     int max_seqlen_k,
     bool has_seqused_k,
@@ -321,22 +327,27 @@ mha_varlen_fwd_impl(
                      window_size_left,
                      window_size_right,
                      seqlenq_ngroups_swapped);
+    
+    int max_splits = oaccum->dimensions()[0];
     if (seqlenq_ngroups_swapped) {
         // Only apply split-k for decoding
-        set_params_splitkv(&scratch, params, batch_size, num_heads,
+        set_params_splitkv(params, batch_size, num_heads,
                            head_size, max_seqlen_k, max_seqlen_q,
-                           head_size_rounded, 0.0, /*num_splits*/0, sm_count, q_dtype);
+                           head_size_rounded, 0.0, /*num_splits*/0, sm_count, q_dtype,
+                           max_splits, oaccum->untyped_data(), lseaccum->untyped_data()
+                        );
     }
 
     // Forward kernel will populate memory with the seed and offset.
-    auto rng_state = scratch.Allocate(2 * 8, 8); // 2 * int64
-    params.rng_state = (uint64_t*)rng_state.value();
+    // auto rng_state = scratch.Allocate(2 * 8, 8); // 2 * int64
+    // params.rng_state = (uint64_t*)rng_state.value();
+    params.rng_state = (uint64_t*)rng_state->untyped_data();
 
     params.alibi_slopes_ptr = nullptr;
 
     if (max_seqlen_k > 0) {
         run_mha_fwd(params, stream);
-        FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
+        // FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0, out->size_bytes(), stream));

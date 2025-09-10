@@ -16,6 +16,8 @@ from einops import rearrange
 import einops
 import math
 
+from flash_attn_jax.util import num_splits_heuristic, round_multiple
+
 # ==== Register primitives ====
 
 _flash_mha_varlen_fwd_p = Primitive("flash_mha_varlen_fwd")
@@ -67,6 +69,19 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
         assert q_dtype in [jnp.bfloat16, jnp.float16]
         assert b >= 1
 
+        if d <= 64:
+            block_n = 256
+        elif d <= 128:
+            block_n = 128
+        else:
+            block_n = 64
+        num_n_blocks = max(1, (max_seqlen_k + block_n - 1) // block_n)
+        num_m_blocks = max(1, (max_seqlen_q + 64 - 1) // 64)
+        sm_count = 114 # H100
+        num_splits = num_splits_heuristic(b * h * num_m_blocks, sm_count, num_n_blocks, 128)
+        lseaccum_shape = (num_splits, b, h, max_seqlen_q)
+        oaccum_shape = (num_splits, b, max_seqlen_q, h, round_multiple(d, 32))
+
         dpad = 8 - (d % 8)
         if dpad > 0:
             q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
@@ -77,14 +92,18 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
         lse_shape = [b, h, max_seqlen_q]
 
         out_types = [jax.ShapeDtypeStruct(out_shape, q_dtype), 
-                     jax.ShapeDtypeStruct(lse_shape, jnp.float32)]
+                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+                     jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+                     jax.ShapeDtypeStruct((2,), jnp.int64)]
+
 
         out, lse = jax.ffi.ffi_call(
             "flash_mha_varlen_fwd", 
             result_shape_dtypes=out_types,
             has_side_effect=False,
             input_layouts=[None]*6, # default row major
-            output_layouts=[None]*2,
+            output_layouts=[None]*5,
             )(q, k, v, seqlens_q, seqlens_k, seqused_k,
             max_seqlen_q=mlir.i32_attr(max_seqlen_q),
             max_seqlen_k=mlir.i32_attr(max_seqlen_k),
@@ -93,7 +112,7 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
             zero_tensors=False,
             is_causal=is_causal,
             window_size_left=window_size_left,
-            window_size_right=window_size_right)
+            window_size_right=window_size_right)[:2]
         
         if dpad > 0:
             out = out[:,:,:d]

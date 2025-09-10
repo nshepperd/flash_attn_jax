@@ -306,13 +306,15 @@ XLA_FFI_DEFINE_HANDLER(
 	mha_fwd, mha_fwd_impl,
 	ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::ScratchAllocator>()
 		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>()
 		.Arg<ffi::AnyBuffer>()
 		.Arg<ffi::AnyBuffer>()
 		.Ret<ffi::AnyBuffer>()
 		.Ret<ffi::Buffer<ffi::F32>>()
+		.Ret<ffi::Buffer<ffi::F32>>()
+		.Ret<ffi::Buffer<ffi::F32>>()
+		.Ret<ffi::Buffer<ffi::S64>>()
 		.Attr<double>("softmax_scale")
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
@@ -344,7 +346,6 @@ XLA_FFI_DEFINE_HANDLER(
 	mha_varlen_fwd, mha_varlen_fwd_impl,
 	ffi::Ffi::Bind()
 		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::ScratchAllocator>()
 		.Ctx<ffi::DeviceOrdinal>()
 		.Arg<ffi::AnyBuffer>() // q
 		.Arg<ffi::AnyBuffer>() // k
@@ -354,6 +355,9 @@ XLA_FFI_DEFINE_HANDLER(
 		.Arg<ffi::Buffer<ffi::S32>>() // seqused_k
 		.Ret<ffi::AnyBuffer>() // o
 		.Ret<ffi::Buffer<ffi::F32>>() // lse
+		.Ret<ffi::Buffer<ffi::F32>>()
+		.Ret<ffi::Buffer<ffi::F32>>()
+		.Ret<ffi::Buffer<ffi::S64>>()
 		.Attr<int>("max_seqlen_q")
 		.Attr<int>("max_seqlen_k")
 		.Attr<bool>("has_seqused_k")

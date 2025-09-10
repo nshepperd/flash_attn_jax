@@ -35,7 +35,8 @@ test = [
     "einops",
     "jax[cuda12]==0.7.*",
     "ipykernel",
-    "pip"
+    "pip",
+    "pyperf",
 ]
 [project.urls]
 Homepage = "https://github.com/nshepperd/flash_attn_jax"

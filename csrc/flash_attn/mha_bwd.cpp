@@ -185,12 +185,13 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
         if (!deterministic) {
             FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate(batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, 4))
                 << "Failed to allocate memory for dq_accum";
-            FFI_CUDA_CHECK(cudaMemset(dq_accum, 0, batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4));
+            FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum, 0, batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, stream));
         } else {
-    //         const int nsplits = (sm_count + batch_size * num_heads - 1) / (batch_size * num_heads);
-	// 		C10_CUDA_CHECK(cudaMalloc(&dq_accum, nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4));
-	// 		// previously allocated with torch.zeros, so i guess we need to zero it
-	// 		C10_CUDA_CHECK(cudaMemset(dq_accum, 0, nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4));
+            const int nsplits = (sm_count + batch_size * num_heads - 1) / (batch_size * num_heads);
+            FFI_CHECK_OPTIONAL(dq_accum, scratch.Allocate(nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, 4))
+                << "Failed to allocate memory for dq_accum";
+			// previously allocated with torch.zeros, so i guess we need to zero it
+			FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum, 0, nsplits * batch_size * seqlen_q_rounded * num_heads * head_size_rounded * 4, stream));
         }
     }
 
@@ -237,9 +238,9 @@ ffi::Error mha_bwd_impl(cudaStream_t stream, ffi::ScratchAllocator scratch,
         FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
         // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
-        FFI_CUDA_CHECK(cudaMemset(dq->untyped_data(), 0, dq->size_bytes()));
-        FFI_CUDA_CHECK(cudaMemset(dk->untyped_data(), 0, dk->size_bytes()));
-        FFI_CUDA_CHECK(cudaMemset(dv->untyped_data(), 0, dv->size_bytes()));
+        FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(dk->untyped_data(), 0, dk->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(dv->untyped_data(), 0, dv->size_bytes(), stream));
     }
 
     return ffi::Error();
