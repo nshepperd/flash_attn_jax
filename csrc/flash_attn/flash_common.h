@@ -22,6 +22,7 @@ ffi::Error set_params_fprop(Flash_fwd_params &params, ffi::DataType element_type
                             void *cu_seqlens_q_d, void *cu_seqlens_k_d, void *seqused_k, void *p_d,
                             void *softmax_lse_d, float p_dropout, float softmax_scale,
                             int window_size_left, int window_size_right,
+                            const bool filter_nan,
                             bool seqlenq_ngroups_swapped = false);
 
 ffi::Error set_params_splitkv(Flash_fwd_params &params,

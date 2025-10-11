@@ -37,6 +37,7 @@ ffi::Error set_params_fprop(Flash_fwd_params &params,
                       float softmax_scale,
                       int window_size_left,
                       int window_size_right,
+                      const bool filter_nan,
                       bool seqlenq_ngroups_swapped) {
 
     // Reset the parameters
@@ -101,6 +102,11 @@ ffi::Error set_params_fprop(Flash_fwd_params &params,
     // Set the different scale values.
     params.scale_softmax = softmax_scale;
     params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+
+    #ifdef FLASHATTENTION_DISABLE_filter_nan
+        FFI_CHECK(!filter_nan) << "This flash attention build does not support filter_nan.";
+    #endif
+    params.filter_nan = filter_nan;
 
     // Set this to probability of keeping an element to simplify things.
     params.p_dropout = 1.f - p_dropout;

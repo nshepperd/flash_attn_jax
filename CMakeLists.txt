@@ -7,6 +7,16 @@ set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
+if(EXISTS ${Python_ROOT_DIR}/bin/python)
+    execute_process(
+        COMMAND ${Python_ROOT_DIR}/bin/python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
+        OUTPUT_VARIABLE PYTHON_SITE_PACKAGES
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message(STATUS "Python site-packages: ${PYTHON_SITE_PACKAGES}")
+    set(CMAKE_PREFIX_PATH ${PYTHON_SITE_PACKAGES})
+endif()
+
 # == Find dependencies ==
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
@@ -67,6 +77,10 @@ set(CUDA_FLAGS
     -DFLASHATTENTION_DISABLE_DROPOUT=1
     -DFLASHATTENTION_DISABLE_ALIBI=1
 )
+SET(CXX_FLAGS
+    -DFLASHATTENTION_DISABLE_DROPOUT=1
+    -DFLASHATTENTION_DISABLE_ALIBI=1
+)
 
 # Collect source files
 file(GLOB CUDA_SOURCES 
@@ -89,6 +103,7 @@ set_property(TARGET flash_api PROPERTY JOB_POOL_COMPILE cuda)
 
 target_compile_options(flash_api PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>
+    ${CXX_FLAGS}
 )
 
 target_include_directories(flash_api PRIVATE

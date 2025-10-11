@@ -11,7 +11,7 @@
 namespace ffi = xla::ffi;
 
 ffi::Error mha_fwd_impl(
-    cudaStream_t stream, 
+    cudaStream_t stream,
     int32_t device,
     ffi::AnyBuffer q,
     ffi::AnyBuffer k,
@@ -24,7 +24,8 @@ ffi::Error mha_fwd_impl(
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
-    int64_t window_size_right);
+    int64_t window_size_right,
+    const bool filter_nan);
 
 ffi::Error
 mha_varlen_fwd_impl(
@@ -48,4 +49,5 @@ mha_varlen_fwd_impl(
     bool zero_tensors,
     bool is_causal,
     int window_size_left,
-    int window_size_right);
+    int window_size_right,
+    const bool filter_nan);

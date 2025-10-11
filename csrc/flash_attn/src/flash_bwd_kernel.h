@@ -76,7 +76,7 @@ make_tiled_copy_C_warpcontiguousN(Copy_Atom<Args...> const& copy_atom,
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_first, bool Is_last, bool Seq_parallel=false, typename Params>
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_filter_nan, bool Is_first, bool Is_last, bool Seq_parallel=false, typename Params>
 inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const int bidb, const int bidh, const int n_block) {
 
     using Element = typename Kernel_traits::Element;
@@ -472,6 +472,10 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         flash::gemm(acc_s, tSrQ, tSrK, tSsQ, tSsK, tiled_mma_sdp,
                     smem_tiled_copy_QdO, smem_tiled_copy_KV, smem_thr_copy_QdO, smem_thr_copy_KV);
 
+        if constexpr (Is_filter_nan) {
+            flash::apply_filter_nan(acc_s);
+        }
+
         // Reshape acc_s from (MMA=4, MMA_N, MMA_N) to (col=(2, MMA_N), row=(2, MMA_N))
         Tensor scores = make_tensor(acc_s.data(), flash::convert_layout_acc_rowcol(acc_s.layout()));
         // if (cute::thread(32, 0)) { print(scores); }
@@ -568,6 +572,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
         // Reshape acc_dp from (MMA=4, MMA_N, MMA_N) to (col=(2, MMA_N), row=(2, MMA_N))
         Tensor dS = make_tensor(acc_dp.data(), scores.layout());
+
         auto pointwise_mult = [](float p, float dp, float d) {
             return p * (!Is_dropout || p >= 0 ? dp - d : d);
         };
@@ -781,34 +786,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Has_alibi, bool Is_even_M, bool Is_even_K, typename Params>
-inline __device__ void compute_dq_dk_dv(const Params &params) {
-
-    // The block index for the batch.
-    const int bidb = blockIdx.x;
-    // const int bidb = blockIdx.y;
-    // The block index for the head.
-    const int bidh = blockIdx.y;
-    // const int bidh = blockIdx.z;
-    // The thread index.
-    const int tidx = threadIdx.x;
-
-    const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
-    if (n_block_max == 1) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
-    } else {
-        // Iterating backward from n_block_max - 1 to 0 might save 1 register
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>(params, bidb, bidh, n_block_max - 1);
-        for (int n_block = n_block_max - 2; n_block > 0; n_block--) {
-            compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>(params, bidb, bidh, n_block);
-        }
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>(params, bidb, bidh, 0);
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, typename Params>
+template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_filter_nan, typename Params>
 inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
 
     // The block index for the batch.
@@ -818,7 +796,7 @@ inline __device__ void compute_dq_dk_dv_seqk_parallel(const Params &params) {
 
     // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
     for (int n_block = blockIdx.x; n_block < (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN; n_block += gridDim.x) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Is_even_MN, Is_even_K, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
+        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Is_even_MN, Is_even_K, Is_filter_nan, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
     }
 }
 

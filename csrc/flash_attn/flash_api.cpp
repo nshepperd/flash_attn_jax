@@ -319,6 +319,7 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
 		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("filter_nan")
 );
 
 XLA_FFI_DEFINE_HANDLER(
@@ -342,6 +343,7 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
 		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("filter_nan")
 		.Attr<bool>("deterministic")
 );
 
@@ -369,6 +371,7 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
 		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("filter_nan")
 );
 
 XLA_FFI_DEFINE_HANDLER(
@@ -397,6 +400,7 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
 		.Attr<int64_t>("window_size_right")
+		.Attr<bool>("filter_nan")
 		.Attr<bool>("deterministic")
 );
 

@@ -28,12 +28,14 @@ def pretty(tensor):
 # more than 4x worse with flash attention.
 def check(ref_out, jax_out, out, margin=4):
     def check1(ref_out, jax_out, out):
-        atol = margin * jnp.max(jnp.abs(jax_out - ref_out)).item()
+        diff = jnp.nan_to_num(jnp.abs(jax_out - ref_out), nan=0.0).max()
+        atol = margin * diff.item()
         rtol = 1e-3
         np.testing.assert_allclose(out, ref_out, rtol=rtol, atol=atol)
     tree_map(check1, ref_out, jax_out, out)
 
-    
+
+@pytest.mark.parametrize("filter_nan", ['', 'filter_nan'])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -42,20 +44,23 @@ def check(ref_out, jax_out, out, margin=4):
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype):
+def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype, filter_nan):
     window_size = (3,3) if local else (-1,-1)
 
     q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
-    ref_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+    if filter_nan and not causal:
+        k = k.at[0,0,0,0].set(jnp.nan)  # inject a nan for testing
+    ref_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size, filter_nan=bool(filter_nan))
     q = q.astype(dtype)
     k = k.astype(dtype)
     v = v.astype(dtype)
-    jax_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
-    out = flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+    jax_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size, filter_nan=bool(filter_nan))
+    out = flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size, filter_nan=bool(filter_nan))
     check(ref_out, jax_out, out)
 
+@pytest.mark.parametrize("filter_nan", ['', 'filter_nan'])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -64,21 +69,23 @@ def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype):
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_flash_bwd(n, seqlen, h, d, m, causal, local, dtype):
+def test_flash_bwd(n, seqlen, h, d, m, causal, local, dtype, filter_nan):
     window_size = (3,3) if local else (-1,-1)
     A = 1.0 / math.sqrt(n * seqlen * h * d)
 
     @jax.grad
     def ref(qkv):
-        return ref_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum() * A
+        return ref_mha(*qkv, is_causal=bool(causal), window_size=window_size, filter_nan=bool(filter_nan)).sum() * A
 
     @jax.jit
     @jax.grad
     def flash(qkv):
-        return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size).sum() * A
+        return flash_mha(*qkv, is_causal=bool(causal), window_size=window_size, filter_nan=bool(filter_nan)).sum() * A
     q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=jnp.float32)
+    if filter_nan and not causal:
+        k = k.at[0,0,0,0].set(jnp.nan)  # inject a nan for testing
     ref_out = ref((q,k,v))
     q = q.astype(dtype)
     k = k.astype(dtype)

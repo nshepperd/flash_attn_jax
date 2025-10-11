@@ -19,7 +19,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                         ffi::ResultBuffer<ffi::F32> dq_accum,   // batch_size x seqlen_q_rounded x num_heads x head_size_rounded
                         ffi::ResultBuffer<ffi::S64> rng_state,  // 2
                         double softmax_scale, bool is_causal,
-                        int64_t window_size_left, int64_t window_size_right, bool deterministic);
+                        int64_t window_size_left, int64_t window_size_right, const bool filter_nan, bool deterministic);
 
 ffi::Error
 mha_varlen_bwd_impl(
@@ -46,4 +46,5 @@ mha_varlen_bwd_impl(
     bool is_causal,
     int64_t window_size_left,
     int64_t window_size_right,
+    const bool filter_nan,
     bool deterministic);

@@ -49,7 +49,8 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_bw
 def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, zero_tensors=False, is_causal: bool = False,
-                         window_size: tuple = (-1, -1), deterministic: bool):
+                         window_size: tuple = (-1, -1), deterministic: bool,
+                         filter_nan: bool = False):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
@@ -67,6 +68,7 @@ def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
         window_size_left=window_size[0],
         window_size_right=window_size[1],
         deterministic=deterministic,
+        filter_nan=filter_nan,
     )
     return tuple(_flash_mha_varlen_bwd_p.bind(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs))
 
@@ -76,7 +78,7 @@ def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, se
                                        max_seqlen_q: int, max_seqlen_k: int,
                                        softmax_scale: float, zero_tensors: bool,
                                        is_causal: bool, window_size_left: int, window_size_right: int,
-                                       deterministic: bool):
+                                       deterministic: bool, filter_nan: bool):
     def bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k):
         q_dtype = dtypes.canonicalize_dtype(q.dtype)
         k_dtype = dtypes.canonicalize_dtype(k.dtype)
@@ -165,9 +167,7 @@ mlir.register_lowering(
 
 def _flash_mha_varlen_bwd_abstract(dout, q, k, v, o, lse, seqlens_q, seqlens_k,
                                    max_seqlen_q: int, max_seqlen_k: int,
-                                   softmax_scale: float, zero_tensors: bool,
-                                   is_causal: bool, window_size_left: int, window_size_right: int,
-                                   deterministic: bool):
+                                   **keywords):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
     v_dtype = dtypes.canonicalize_dtype(v.dtype)

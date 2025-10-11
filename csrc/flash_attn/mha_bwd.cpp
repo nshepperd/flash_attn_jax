@@ -48,6 +48,7 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
                       float softmax_scale,
                       int window_size_left,
                       int window_size_right,
+                      const bool filter_nan,
                       bool deterministic) {
 
     FFI_RET_CHECK(set_params_fprop(params, element_type,
@@ -61,7 +62,8 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
                      p_dropout,
                      softmax_scale,
                      window_size_left,
-                     window_size_right));
+                     window_size_right,
+                     filter_nan));
 
     // Set the pointers and strides.
     params.do_ptr = dout_ptr;
@@ -124,7 +126,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                         ffi::ResultBuffer<ffi::F32> dq_accum,   // batch_size x seqlen_q_rounded x num_heads x head_size_rounded
                         ffi::ResultBuffer<ffi::S64> rng_state,  // 2
                         double softmax_scale, bool is_causal,
-                        int64_t window_size_left, int64_t window_size_right, bool deterministic) {
+                        int64_t window_size_left, int64_t window_size_right, const bool filter_nan, bool deterministic) {
 	int major, minor, sm_count;
     FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
@@ -219,6 +221,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                      softmax_scale,
                      window_size_left,
                      window_size_right,
+                     filter_nan,
                      deterministic));
     params.dq_accum_split_stride = !deterministic ? 0 : (batch_size * seqlen_q_rounded * num_heads * head_size_rounded);
 
@@ -264,7 +267,8 @@ mha_varlen_bwd_impl(
     bool zero_tensors,
     bool is_causal,
     int64_t window_size_left,
-    int64_t window_size_right, 
+    int64_t window_size_right,
+    const bool filter_nan,
     bool deterministic) {
 
     if (is_causal) { window_size_right = 0; }
@@ -399,6 +403,7 @@ mha_varlen_bwd_impl(
                      softmax_scale,
                      window_size_left,
                      window_size_right,
+                     filter_nan,
                      deterministic));
     params.dq_accum_split_stride = dq_accum_split_stride;
 

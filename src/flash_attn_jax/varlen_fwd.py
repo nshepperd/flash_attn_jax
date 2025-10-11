@@ -31,7 +31,8 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
                          window_size: tuple = (-1, -1),
-                         zero_tensors: bool = False):
+                         zero_tensors: bool = False,
+                         filter_nan: bool = False):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
@@ -58,7 +59,8 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
 
 def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, seqused_k, 
                                        max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool,
-                                       softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+                                       softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int,
+                                       filter_nan: bool):
     def fwd(q,k,v, seqlens_q, seqlens_k, seqused_k):
         q_dtype = dtypes.canonicalize_dtype(q.dtype)
         k_dtype = dtypes.canonicalize_dtype(k.dtype)
@@ -112,8 +114,10 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
             zero_tensors=False,
             is_causal=is_causal,
             window_size_left=window_size_left,
-            window_size_right=window_size_right)[:2]
-        
+            window_size_right=window_size_right,
+            filter_nan=filter_nan,
+            )[:2]
+
         if dpad > 0:
             out = out[:,:,:d]
 
@@ -130,7 +134,7 @@ mlir.register_lowering(
 
 def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, seqused_k, 
                                    max_seqlen_q, max_seqlen_k, has_seqused_k, 
-                                   softmax_scale=None, is_causal=None, window_size_left=None, window_size_right=None):
+                                   **keywords):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
     v_dtype = dtypes.canonicalize_dtype(v.dtype)

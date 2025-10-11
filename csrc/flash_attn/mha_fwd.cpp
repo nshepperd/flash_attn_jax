@@ -31,9 +31,9 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split
 }
 
 
-ffi::Error mha_fwd_impl(cudaStream_t stream, 
+ffi::Error mha_fwd_impl(cudaStream_t stream,
     int32_t device,
-    ffi::AnyBuffer q, 
+    ffi::AnyBuffer q,
     ffi::AnyBuffer k,
     ffi::AnyBuffer v,
     ffi::Result<ffi::AnyBuffer> o,
@@ -44,7 +44,8 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
-    int64_t window_size_right) {
+    int64_t window_size_right,
+    const bool filter_nan) {
     int major, minor;
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
@@ -120,7 +121,8 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
                      0.0,
                      softmax_scale,
                      window_size_left,
-                     window_size_right));
+                     window_size_right,
+                     filter_nan));
 
 
 	int sm_count;
@@ -180,7 +182,8 @@ mha_varlen_fwd_impl(
     bool zero_tensors,
     bool is_causal,
     int window_size_left,
-    int window_size_right) {
+    int window_size_right,
+    const bool filter_nan) {
 
     // at::Tensor &q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
     //            const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -326,6 +329,7 @@ mha_varlen_fwd_impl(
                      softmax_scale,
                      window_size_left,
                      window_size_right,
+                     filter_nan,
                      seqlenq_ngroups_swapped);
     
     int max_splits = oaccum->dimensions()[0];

@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 from functools import partial
 import einops
+from jax import Array
 
 def make_mask(R, C, is_causal, window_size):
     q_idx = jnp.arange(R)[:, None]-R
@@ -20,10 +21,10 @@ def make_mask(R, C, is_causal, window_size):
         mask &= k_idx <= q_idx + window_size[1]
     return mask
 
-def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
-    return ref_fwd(q,k,v, is_causal=is_causal, window_size=window_size, softmax_scale=softmax_scale)[0]
+def ref_mha(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None, filter_nan=False):
+    return ref_fwd(q,k,v, is_causal=is_causal, window_size=window_size, softmax_scale=softmax_scale, filter_nan=filter_nan)[0]
 
-def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
+def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None, filter_nan=False):
     [n, l, h, d] = q.shape
     [n, lk, hk, d] = k.shape
     if softmax_scale is None:
@@ -33,7 +34,9 @@ def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
         assert h > hk and h % hk == 0
         q = einops.rearrange(q, 'n L (h x) d -> n L h x d', h=hk)
         S = jnp.einsum('nlhxd,nLhd->nhxlL',q,k) * softmax_scale
-        S = jnp.where(mask, S, float('-inf'))
+        S: Array = jnp.where(mask, S, float('-inf'))
+        if filter_nan:
+            S = jnp.where(jnp.isnan(S), float('-inf'), S)
         lse = jax.nn.logsumexp(S, axis=-1) #nhxl
         P = jnp.exp(S - lse[...,None]) # n h l L
         o = jnp.einsum('nhxlL,nLhd->nlhxd',P,v)
@@ -43,12 +46,14 @@ def ref_fwd(q,k,v, is_causal=False, window_size=(-1,-1), softmax_scale=None):
     else:
         S = jnp.einsum('nlhd,nLhd->nhlL',q,k)
         S = jnp.where(mask, S, float('-inf'))
+        if filter_nan:
+            S = jnp.where(jnp.isnan(S), float('-inf'), S)
         lse = jax.nn.logsumexp(S*softmax_scale, axis=-1) #nhl
         P = jax.nn.softmax(S*softmax_scale, axis=-1) #jnp.exp(att - lse[...,None])
         o = jnp.einsum('nhlL,nLhd->nlhd',P,v)
         return o.astype(q.dtype), lse.astype(jnp.float32)
 
-def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=None):
+def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=None, filter_nan=False):
     [n, l, h, d] = q.shape
     [n, lk, hk, d] = k.shape
     if softmax_scale is None:
@@ -58,10 +63,12 @@ def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=
         assert h > hk and h % hk == 0
         q = einops.rearrange(q, 'n l (h x) d -> n l h x d', h=hk)
         lse = einops.rearrange(lse, 'n (h x) l -> n h x l', h=hk)
-        S = jnp.einsum('nlhxd,nLhd->nhxlL',q,k) * softmax_scale
         D = einops.reduce(do * o, 'n l (h x) d -> n h x l', reduction='sum', h=hk)
         do = einops.rearrange(do, 'n l (h x) d -> n l h x d', h=hk)
-        S = jnp.where(mask, S, float('-inf'))
+        S = jnp.einsum('nlhxd,nLhd->nhxlL',q,k) * softmax_scale
+        S: Array = jnp.where(mask, S, float('-inf'))
+        if filter_nan:
+            S = jnp.where(jnp.isnan(S), float('-inf'), S)
         P = jnp.exp(S - lse[...,None]) # n h x l L
         dP = jnp.einsum('nlhxd,nLhd->nhxlL',do,v)
         dv = jnp.einsum('nlhxd,nhxlL->nLhd',do,P)
@@ -71,9 +78,11 @@ def ref_bwd(do,q,k,v,o,lse, is_causal=False, window_size=(-1,-1), softmax_scale=
         dq = einops.rearrange(dq, 'n l h x d -> n l (h x) d')
         return dq.astype(q.dtype),dk.astype(q.dtype),dv.astype(q.dtype)
     else:
-        S = jnp.einsum('nlhd,nLhd->nhlL',q,k)*softmax_scale
         D = einops.reduce(do * o, 'n l h d -> n h l', reduction='sum')
-        S = jnp.where(mask, S, float('-inf'))
+        S = jnp.einsum('nlhd,nLhd->nhlL',q,k)*softmax_scale
+        S: Array = jnp.where(mask, S, float('-inf'))
+        if filter_nan:
+            S = jnp.where(jnp.isnan(S), float('-inf'), S)
         P = jnp.exp(S - lse[...,None]) # n h l L
         dP = jnp.einsum('nlhd,nLhd->nhlL',do,v)
         dv = jnp.einsum('nlhd,nhlL->nLhd',do,P)

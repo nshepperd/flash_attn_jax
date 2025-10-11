@@ -136,7 +136,7 @@ class _flash_mha_vjp:
 
 # ==== Frontend ====
 
-def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
+def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1), filter_nan=False):
     """Flash attention.
 
     softmax_scale defaults to 1/sqrt(d) and must be a python float if
@@ -150,4 +150,4 @@ def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
     if softmax_scale is None:
         softmax_scale = 1/math.sqrt(q.shape[-1])
     assert type(softmax_scale) is float
-    return _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
+    return _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size, filter_nan=filter_nan))

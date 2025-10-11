@@ -36,7 +36,9 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_fwd_p)
 def flash_mha_fwd(q, k, v,
                   softmax_scale: Optional[float] = None, 
                   is_causal: bool = False,
-                  window_size: tuple = (-1, -1)):
+                  window_size: tuple = (-1, -1),
+                  filter_nan: bool = False
+                  ):
     [nq, sq, hq, dq] = q.shape
     [nk, sk, hk, dk] = k.shape
     [nv, sv, hv, dv] = v.shape
@@ -56,12 +58,13 @@ def flash_mha_fwd(q, k, v,
         is_causal=is_causal,
         window_size_left=window_size[0],
         window_size_right=window_size[1],
+        filter_nan=filter_nan,
     )
     return tuple(_flash_mha_fwd_p.bind(q, k, v, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int, filter_nan: bool):
     #         // This needs to match with run_mha_fwd_splitkv_dispatch
     # const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
     # const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
@@ -112,6 +115,7 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, w
         is_causal=is_causal,
         window_size_left=window_size_left,
         window_size_right=window_size_right,
+        filter_nan=filter_nan,
         )[:2]
 
     if dpad > 0:

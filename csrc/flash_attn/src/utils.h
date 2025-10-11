@@ -6,6 +6,8 @@
 
 #include "cute/tensor.hpp"
 #include <assert.h>
+#include <cmath>
+#include <limits>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -17,6 +19,7 @@
 
 #include <cute/algorithm/copy.hpp>
 #include <cute/algorithm/gemm.hpp>
+#include <cute/tensor.hpp>
 
 #include <cutlass/array.h>
 #include <cutlass/cutlass.h>
@@ -390,6 +393,26 @@ __forceinline__ __device__ void copy_w_min_idx(cute::Tensor<Engine0, Layout0> co
                 }
             }
         }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename Engine, typename Layout>
+inline __device__ void apply_filter_nan(cute::Tensor<Engine, Layout> &tensor) {
+    #pragma unroll
+    for (int i = 0; i < cute::size(tensor); ++i) {
+        tensor(i) = isnan(tensor(i)) ? -INFINITY : tensor(i);
+    }
+}
+
+template <typename Engine0, typename Layout0, typename Engine1, typename Layout1>
+inline __device__ void calculate_dabs(cute::Tensor<Engine0, Layout0> &original_tensor, cute::Tensor<Engine1, Layout1> &dst_tensor) {
+    #pragma unroll
+    for (int i = 0; i < cute::size(original_tensor); ++i) {
+        // Derivative of abs(x) is sign(x), which is 1 if x > 0, -1 if x < 0, and 0 if x == 0
+        // dst_tensor(i) = (original_tensor(i) > 0.f) ? 1.f : ((original_tensor(i) < 0.f) ? -1.f : 0.f);
+        dst_tensor(i) = original_tensor(i);
     }
 }
 
