@@ -1,4 +1,3 @@
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 cmake_minimum_required(VERSION 3.18)
 
 project(flash_attn LANGUAGES CXX CUDA)
@@ -47,6 +46,10 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 
+if (${NO_OPTIONS_FILE})
+    set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES "0")
+    set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES "0")
+endif()
 
 # CUDA flags
 set(CMAKE_CXX_STANDARD 20)
