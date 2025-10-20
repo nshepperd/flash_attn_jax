@@ -1,0 +1,141 @@
+import math
+from functools import partial, wraps
+from typing import List, Optional
+
+import einops
+import jax
+import jax._src.dispatch
+import jax.numpy as jnp
+import numpy as np
+from einops import rearrange
+from jax import core, dtypes
+from jax.core import ShapedArray
+from jax.experimental.custom_partitioning import (
+    ArrayMapping,
+    CompoundFactor,
+    SdyShardingRule,
+    custom_partitioning,
+)
+from jax.extend.core import Primitive
+from jax.interpreters import batching, mlir, xla
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+
+from flash_attn_jax.ring_attention import ring_fwd
+from flash_attn_jax.util import num_splits_heuristic, round_multiple
+
+# ==== Register primitives ====
+
+_flash_mha_fwd_p = Primitive("flash_mha_fwd")
+_flash_mha_fwd_p.multiple_results = True
+_flash_mha_fwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_fwd_p))
+jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_fwd_p)
+
+# ==== Frontend ====
+
+def flash_mha_fwd(q, k, v,
+                  softmax_scale: Optional[float] = None, 
+                  is_causal: bool = False,
+                  window_size: tuple = (-1, -1)):
+    [nq, sq, hq, dq] = q.shape
+    [nk, sk, hk, dk] = k.shape
+    [nv, sv, hv, dv] = v.shape
+    assert nq == nk == nv
+    assert hk == hv
+    assert nq % nk == 0 # Can be larger than nk if GQA
+    assert dq == dk == dv # Don't support head size mismatch
+    assert sk == sv
+    assert q.dtype == k.dtype == v.dtype
+    assert q.dtype in [jnp.bfloat16, jnp.float16]
+    
+    d = q.shape[-1]
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+    kwargs = dict(
+        softmax_scale=softmax_scale,
+        is_causal=is_causal,
+        window_size_left=window_size[0],
+        window_size_right=window_size[1],
+    )
+    return tuple(_flash_mha_fwd_p.bind(q, k, v, **kwargs))
+
+# ==== HLO lowering ====
+
+def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+    #         // This needs to match with run_mha_fwd_splitkv_dispatch
+    # const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
+    # const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
+    # // Technically kBlockM = 64 only for the splitKV kernels, not the standard kernel.
+    # // In any case we don't expect seqlen_q to be larger than 64 for inference.
+    # const int num_m_blocks = (max_seqlen_q + 64 - 1) / 64;
+    [n, lq, hq, d] = q.shape
+    [_, lk, hk, _] = k.shape
+    dtype = q.dtype
+
+    if d <= 64:
+        block_n = 256
+    elif d <= 128:
+        block_n = 128
+    else:
+        block_n = 64
+    num_n_blocks = max(1, (lk + block_n - 1) // block_n)
+    num_m_blocks = max(1, (lq + 64 - 1) // 64)
+    sm_count = 114 # H100
+    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
+    lseaccum_shape = (num_splits, n, hq, lq)
+    oaccum_shape = (num_splits, n, lq, hq, round_multiple(d, 32))
+
+    dpad = (8 - d%8) % 8
+    if dpad > 0:
+        # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
+        q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+    
+    o_shape = [n, lq, hq, d+dpad]
+    lse_shape = [n, hq, lq]
+
+    out_types = [jax.ShapeDtypeStruct(o_shape, dtype), 
+                    jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+                    jax.ShapeDtypeStruct((2,), jnp.int64),
+                    ]
+
+    o, lse = jax.ffi.ffi_call(
+        "flash_mha_fwd",
+        result_shape_dtypes=out_types,
+        has_side_effect=False,
+        input_layouts=[None, None, None], # default row major
+        output_layouts=[None, None, None, None, None],
+        )(q, k, v, softmax_scale=softmax_scale,
+        is_causal=is_causal,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
+        )[:2]
+
+    if dpad > 0:
+        o = o[:,:,:,:d]
+    return o, lse
+
+def _flash_mha_fwd_lowering_mlir(ctx, q, k, v, **keywords):
+    return mlir.lower_fun(_flash_mha_fwd_lowering, multiple_results=True)(ctx, q, k, v, **keywords)
+
+mlir.register_lowering(
+    _flash_mha_fwd_p,
+    _flash_mha_fwd_lowering_mlir,  # type: ignore
+    platform="gpu",
+)
+
+# ==== Abstract Evaluation ====
+
+def _flash_mha_fwd_abstract(q, k, v, **keywords):
+    q_dtype = dtypes.canonicalize_dtype(q.dtype)
+    [n, sq, hq, d] = q.shape
+    out_shape = [n, sq, hq, d]
+    lse_shape = [n, hq, sq]    
+    return (
+        ShapedArray(out_shape, q_dtype),
+        ShapedArray(lse_shape, jnp.float32)
+    )
+_flash_mha_fwd_p.def_abstract_eval(_flash_mha_fwd_abstract)
