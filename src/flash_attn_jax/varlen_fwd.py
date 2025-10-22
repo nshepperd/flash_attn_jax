@@ -52,6 +52,7 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
         is_causal=is_causal,
         window_size_left=window_size[0],
         window_size_right=window_size[1],
+        filter_nan=filter_nan,
     )
     return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, seqused_k, **kwargs))
 
