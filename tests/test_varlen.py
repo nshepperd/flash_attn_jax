@@ -135,6 +135,60 @@ def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
     mha_grad = jax.grad(fwd)((q,k,v), dtype=dtype)
     check(ref_grad, ref_grad_dtype, mha_grad)
 
+def vmap_unrolled(f):
+    def wrapped(*args, **kwargs):
+        outs = []
+        for items in zip(*args):
+            outs.append(f(*items, **kwargs))
+        return jnp.stack(outs)# for o in zip(*outs)
+    return wrapped
+
+@pytest.mark.parametrize("seqused_k_limit", [None, 4])
+@pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
+@pytest.mark.parametrize("local", ['local',''])
+@pytest.mark.parametrize("causal", ['causal',''])
+@pytest.mark.parametrize("d", [59, 32])
+@pytest.mark.parametrize("h", [1, 4])
+@pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
+def test_varlen_flash_vmap(m, h, d, causal, local, dtype, seqused_k_limit):
+    window_size = (3,3) if local else (-1,-1)
+    lens = [1, 2, 0, 6, 10]
+    b = len(lens)
+    total_seqlen = sum(lens)
+
+    if seqused_k_limit is not None and (causal or local):
+        pytest.skip()
+
+    N = 4
+    fenceposts = jnp.broadcast_to(jnp.cumsum(jnp.array([0] + lens), dtype=jnp.int32), (N, b+1))
+    q = jax.random.normal(jax.random.PRNGKey(0), [N, total_seqlen, h*m, d], dtype=dtype)
+    k = jax.random.normal(jax.random.PRNGKey(1), [N, total_seqlen, h, d], dtype=dtype)
+    v = jax.random.normal(jax.random.PRNGKey(2), [N, total_seqlen, h, d], dtype=dtype)
+    seqused_k = None
+    if seqused_k_limit is not None:
+        seqused_k = jnp.array([min(l, seqused_k_limit) for l in lens])
+        seqused_k = jnp.broadcast_to(seqused_k, (N, b))
+    def fwd_fn(q,k,v,fenceposts,seqused_k=None):
+        return flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
+                           seqused_k=seqused_k,
+                           max_seqlen_q=max(lens), max_seqlen_k=max(lens),
+                            is_causal=bool(causal), window_size=window_size)
+    
+    if seqused_k is not None:
+        out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts, seqused_k)
+    else:
+        out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts)
+    out_vmap = jax.vmap(fwd_fn)(q,k,v,fenceposts, seqused_k)
+    np.testing.assert_allclose(out_vmap, out_ref)
+
+    if seqused_k is not None:
+        grad_ref = jax.grad(lambda q,k,v: jnp.square(vmap_unrolled(fwd_fn)(q,k,v,fenceposts, seqused_k)).sum())(q,k,v)
+    else:
+        grad_ref = jax.grad(lambda q,k,v: jnp.square(vmap_unrolled(fwd_fn)(q,k,v,fenceposts)).sum())(q,k,v)
+    grad_vmap = jax.grad(lambda q,k,v: jnp.square(jax.vmap(fwd_fn)(q,k,v,fenceposts, seqused_k)).sum())(q,k,v)
+    
+    np.testing.assert_allclose(grad_vmap[0], grad_ref[0])
+
 if __name__ == '__main__':
     print(flash_mha_varlen(jnp.zeros([4,1,64],dtype=jnp.float16), 
                                 jnp.zeros([4,1,64],dtype=jnp.float16), 
