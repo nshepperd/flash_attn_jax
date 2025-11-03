@@ -34,10 +34,11 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_fwd_p)
 
 # ==== Frontend ====
 
-def flash_mha_fwd(q, k, v,
+def flash_mha_fwd(q, k, v, *,
                   softmax_scale: Optional[float] = None, 
                   is_causal: bool = False,
-                  window_size: tuple = (-1, -1)):
+                  window_size_left: int,
+                  window_size_right: int):
     [nq, sq, hq, dq] = q.shape
     [nk, sk, hk, dk] = k.shape
     [nv, sv, hv, dv] = v.shape
@@ -49,14 +50,11 @@ def flash_mha_fwd(q, k, v,
     assert q.dtype == k.dtype == v.dtype
     assert q.dtype in [jnp.bfloat16, jnp.float16]
     
-    d = q.shape[-1]
-    if softmax_scale is None:
-        softmax_scale = 1.0 / math.sqrt(d)
     kwargs = dict(
         softmax_scale=softmax_scale,
         is_causal=is_causal,
-        window_size_left=window_size[0],
-        window_size_right=window_size[1],
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
     )
     return tuple(_flash_mha_fwd_p.bind(q, k, v, **kwargs))
 
@@ -72,6 +70,9 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, w
     [n, lq, hq, d] = q.shape
     [_, lk, hk, _] = k.shape
     dtype = q.dtype
+
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
 
     if d <= 64:
         block_n = 256
@@ -151,10 +152,10 @@ def mha_fwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
   if mapped == (True, True, True):
     x, n, sq, hq, d = q.shape
     x, n, sk, hk, d = k.shape
-    out, lse = _flash_mha_fwd_p.bind(q.reshape((x*n, sq, hq, d)), 
-                                     k.reshape((x*n, sk, hk, d)), 
-                                     v.reshape((x*n, sk, hk, d)), 
-                                     **kwargs)
+    out, lse = flash_mha_fwd(q.reshape((x*n, sq, hq, d)), 
+                            k.reshape((x*n, sk, hk, d)), 
+                            v.reshape((x*n, sk, hk, d)), 
+                            **kwargs)
     out = out.reshape((x, n, sq, hq, d))
     lse = lse.reshape((x, n, hq, sq))
     return (out, lse), (0,0)
@@ -163,7 +164,7 @@ def mha_fwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
     x, n, sq, hq, d = q.shape
     n, sk, hk, d = k.shape
     q = einops.rearrange(q, 'x n sq hq d -> n sq (hq x) d')
-    out, lse = _flash_mha_fwd_p.bind(q, k, v, **kwargs)
+    out, lse = flash_mha_fwd(q, k, v, **kwargs)
     out = einops.rearrange(out, 'n l (h x) d -> x n l h d', x=x)
     lse = einops.rearrange(lse, 'n (h x) l -> x n h l', x=x)
     return (out, lse), (0,0)

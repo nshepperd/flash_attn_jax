@@ -50,14 +50,19 @@ def flash_mha(q,k,v,softmax_scale=None, is_causal=False, window_size=(-1,-1)):
     """Flash attention.
 
     softmax_scale defaults to 1/sqrt(d) and must be a python float if
-    provided (ie. can't be a tensor or a tracer).0
+    provided (ie. can't be a tensor or a tracer).
 
     """
-    assert len(q.shape) == 4
-    assert len(k.shape) == 4
-    assert len(v.shape) == 4
+    [nq, sq, hq, dq] = q.shape
+    [nk, sk, hk, dk] = k.shape
+    [nv, sv, hv, dv] = v.shape
+    assert nq == nk == nv
+    assert hk == hv
+    assert nq % nk == 0 # Can be larger than nk if GQA
+    assert dq == dk == dv # Don't support head size mismatch
+    assert sk == sv
+    assert q.dtype == k.dtype == v.dtype
+    assert q.dtype in [jnp.bfloat16, jnp.float16]
 
-    if softmax_scale is None:
-        softmax_scale = 1/math.sqrt(q.shape[-1])
-    assert type(softmax_scale) is float
-    return _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size=window_size))
+    window_size_left, window_size_right = window_size
+    return _flash_mha_vjp(q,k,v,dict(softmax_scale=softmax_scale, is_causal=is_causal, window_size_left=window_size_left, window_size_right=window_size_right))

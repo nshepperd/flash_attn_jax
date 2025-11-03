@@ -30,26 +30,25 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_bwd_p)
 
 def flash_mha_bwd(dout, q, k, v, o, lse, *,
                   softmax_scale: Optional[float] = None, is_causal: bool = False,
-                  window_size: tuple = (-1, -1), deterministic: bool = False):
-    d = q.shape[-1]
-    if softmax_scale is None:
-        softmax_scale = 1.0 / math.sqrt(d)
+                  window_size_left: int = -1, window_size_right: int = -1):
     kwargs = dict(
         softmax_scale=softmax_scale,
         is_causal=is_causal,
-        window_size_left=window_size[0],
-        window_size_right=window_size[1],
-        deterministic=deterministic,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
     )
     return tuple(_flash_mha_bwd_p.bind(dout, q, k, v, o, lse, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int, deterministic: bool):
+def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
     [n, lq, hq, d] = q.shape
     [_, lk, hk, _] = k.shape
     dtype = q.dtype
     
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+
     dpad = (8 - d%8) % 8
     if dpad > 0:
         # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.
@@ -67,7 +66,7 @@ def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is
     
     # Calculate nsplits for deterministic mode
     sm_count = 114  # H100, should ideally get this from device query
-    if deterministic:
+    if False: # deterministic mode
         nsplits = max(1, (sm_count + n * hq - 1) // (n * hq))
         dq_accum_shape = (nsplits, n, lq_rounded, hq, d_rounded)
     else:
@@ -93,7 +92,7 @@ def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is
         is_causal=is_causal,
         window_size_left=window_size_left,
         window_size_right=window_size_right,
-        deterministic=deterministic)[:3]  # Only return first 3 outputs (dq, dk, dv)
+        deterministic=False)[:3]  # Only return first 3 outputs (dq, dk, dv)
 
     if hq != hk:
         assert hq > hk and hq % hk == 0
@@ -142,7 +141,7 @@ def mha_bwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
     if mapped == (True, True, True, True, True, True):
         x = vector_arg_values[0].shape[0]
         do, q, k, v, o, lse = [einops.rearrange(val, 'x n ... -> (x n) ...') for val in vector_arg_values]
-        dq, dk, dv = _flash_mha_bwd_p.bind(do, q, k, v, o, lse, **kwargs)
+        dq, dk, dv = flash_mha_bwd(do, q, k, v, o, lse, **kwargs)
         dq = einops.rearrange(dq, '(n x) l h d -> x n l h d', x=x)
         dk = einops.rearrange(dk, '(n x) l h d -> x n l h d', x=x)
         dv = einops.rearrange(dv, '(n x) l h d -> x n l h d', x=x)
@@ -155,7 +154,7 @@ def mha_bwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
         q = einops.rearrange(q, 'x n sq hq d -> n sq (hq x) d')
         o = einops.rearrange(o, 'x n sq hq d -> n sq (hq x) d')
         lse = einops.rearrange(lse, 'x n hq sq -> n (hq x) sq')
-        dq, dk, dv = _flash_mha_bwd_p.bind(do, q, k, v, o, lse, **kwargs)
+        dq, dk, dv = flash_mha_bwd(do, q, k, v, o, lse, **kwargs)
         dq = einops.rearrange(dq, 'n l (h x) d -> x n l h d', x=x)
         return (dq,dk,dv), (0,None,None)
     else:
