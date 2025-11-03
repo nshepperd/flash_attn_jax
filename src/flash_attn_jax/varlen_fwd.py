@@ -28,9 +28,10 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_fw
 # ==== Frontend ====
 
 def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
+                         *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
-                         window_size: tuple = (-1, -1),
+                         window_size: tuple[int,int] = (-1, -1),
                          zero_tensors: bool = False,
                          filter_nan: bool = False):
     if max_seqlen_q  == -1:
@@ -42,8 +43,6 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
     has_seqused_k = seqused_k is not None
-    if seqused_k is None:
-        seqused_k = jnp.empty([], dtype=jnp.int32)
     kwargs = dict(
         max_seqlen_q=max_seqlen_q,
         max_seqlen_k=max_seqlen_k,
@@ -54,15 +53,18 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
         window_size_right=window_size[1],
         filter_nan=filter_nan,
     )
-    return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, seqused_k, **kwargs))
+    if seqused_k is not None:
+        return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, seqused_k, **kwargs))
+    else:
+        return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, seqused_k, 
+def _flash_mha_varlen_fwd_hlo_lowering(ctx, *args,
                                        max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool,
                                        softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int,
                                        filter_nan: bool):
-    def fwd(q,k,v, seqlens_q, seqlens_k, seqused_k):
+    def fwd(q,k,v, seqlens_q, seqlens_k, seqused_k=None):
         q_dtype = dtypes.canonicalize_dtype(q.dtype)
         k_dtype = dtypes.canonicalize_dtype(k.dtype)
         v_dtype = dtypes.canonicalize_dtype(v.dtype)
@@ -105,12 +107,11 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
             "flash_mha_varlen_fwd", 
             result_shape_dtypes=out_types,
             has_side_effect=False,
-            input_layouts=[None]*6, # default row major
+            input_layouts=[None]*(5 + (seqused_k is not None)), # default row major
             output_layouts=[None]*5,
-            )(q, k, v, seqlens_q, seqlens_k, seqused_k,
+            )(q, k, v, seqlens_q, seqlens_k, *[seqused_k] if seqused_k is not None else [],
             max_seqlen_q=mlir.i32_attr(max_seqlen_q),
             max_seqlen_k=mlir.i32_attr(max_seqlen_k),
-            has_seqused_k=has_seqused_k,
             softmax_scale=softmax_scale,
             zero_tensors=False,
             is_causal=is_causal,
@@ -123,7 +124,7 @@ def _flash_mha_varlen_fwd_hlo_lowering(ctx, q, k, v, seqlens_q, seqlens_k, sequs
             out = out[:,:,:d]
 
         return out, lse
-    return mlir.lower_fun(fwd, multiple_results=True)(ctx, q, k, v, seqlens_q, seqlens_k, seqused_k)
+    return mlir.lower_fun(fwd, multiple_results=True)(ctx, *args)
 
 mlir.register_lowering(
     _flash_mha_varlen_fwd_p,
@@ -133,7 +134,7 @@ mlir.register_lowering(
 
 # ==== Abstract Evaluation ====
 
-def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, seqused_k, 
+def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *,
                                    max_seqlen_q, max_seqlen_k, has_seqused_k, 
                                    **keywords):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
