@@ -37,10 +37,6 @@ def check(ref_out, jax_out, out, margin=4):
         # assert jnp.max(jnp.abs(out - ref_out)).item() <= margin * jnp.max(jnp.abs(jax_out - ref_out)).item(), (pretty(jnp.abs(out - ref_out)), 'vs', pretty(jnp.abs(jax_out - ref_out)))
     tree_map(check1, ref_out, jax_out, out)
 
-@pytest.fixture(params=['', 'deterministic'])
-def deterministic(request):
-    return request.param == 'deterministic'
-
 @pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
@@ -48,7 +44,7 @@ def deterministic(request):
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit, deterministic: bool):
+def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -87,9 +83,9 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit, determ
     out = flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
                            seqused_k=seqused_k,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size,
-                            deterministic=deterministic)
+                            is_causal=bool(causal), window_size=window_size)
     check(ref_out, jax_out, out)
+    
 
 @pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
@@ -98,7 +94,7 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit, determ
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit, deterministic: bool):
+def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -131,8 +127,7 @@ def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit, determ
         q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
         o = flash_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts, seqused_k=seqused_k,
                             max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size,
-                            deterministic=deterministic)
+                            is_causal=bool(causal), window_size=window_size)
         return o.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
     
     ref_grad = jax.grad(ref)((q,k,v), dtype=jnp.float32)

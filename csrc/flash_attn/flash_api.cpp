@@ -355,7 +355,7 @@ XLA_FFI_DEFINE_HANDLER(
 		.Arg<ffi::AnyBuffer>() // v
 		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_q
 		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_k
-		.Arg<ffi::Buffer<ffi::S32>>() // seqused_k
+		.OptionalArg<ffi::Buffer<ffi::S32>>() // seqused_k
 		.Ret<ffi::AnyBuffer>() // o
 		.Ret<ffi::Buffer<ffi::F32>>() // lse
 		.Ret<ffi::Buffer<ffi::F32>>()
@@ -363,7 +363,6 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::Buffer<ffi::S64>>()
 		.Attr<int>("max_seqlen_q")
 		.Attr<int>("max_seqlen_k")
-		.Attr<bool>("has_seqused_k")
 		.Attr<double>("softmax_scale")
 		.Attr<bool>("zero_tensors")
 		.Attr<bool>("is_causal")

@@ -49,7 +49,7 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_bw
 def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, zero_tensors=False, is_causal: bool = False,
-                         window_size: tuple = (-1, -1), deterministic: bool):
+                         window_size: tuple = (-1, -1), deterministic: bool = False):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
@@ -72,7 +72,7 @@ def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
 
 # ==== HLO lowering ====
 
-def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, seqlens_k,
+def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                                        max_seqlen_q: int, max_seqlen_k: int,
                                        softmax_scale: float, zero_tensors: bool,
                                        is_causal: bool, window_size_left: int, window_size_right: int,

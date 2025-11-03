@@ -50,11 +50,10 @@ def _flash_mha_varlen_vjp_bwd(config, pack, dout):
     return (dq,dk,dv,None,None,None)
 _flash_mha_varlen_vjp.defvjp(_flash_mha_varlen_vjp_fwd, _flash_mha_varlen_vjp_bwd)
     
-def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None,
+def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None, *,
                      max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                      softmax_scale: Optional[float] = None, is_causal: bool = False,
-                     window_size: tuple = (-1, -1), zero_tensors: bool = False,
-                     deterministic: bool = False):
+                     window_size: tuple = (-1, -1), zero_tensors: bool = False):
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = dict(
@@ -63,7 +62,5 @@ def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None,
         softmax_scale=softmax_scale,
         is_causal=is_causal,
         window_size=window_size,
-        zero_tensors=zero_tensors,
-        deterministic=deterministic,
     )
     return _flash_mha_varlen_vjp(q, k, v, seqlens_q, seqlens_k, seqused_k, config)

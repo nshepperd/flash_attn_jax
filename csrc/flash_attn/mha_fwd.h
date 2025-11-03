@@ -35,7 +35,7 @@ mha_varlen_fwd_impl(
     ffi::AnyBuffer v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::Buffer<ffi::S32> cu_seqlens_q,  // b+1
     ffi::Buffer<ffi::S32> cu_seqlens_k,  // b+1
-    ffi::Buffer<ffi::S32> seqused_k, // b. If given, only this many elements of each batch element's keys are used.
+    std::optional<ffi::Buffer<ffi::S32>> seqused_k, // b. If given, only this many elements of each batch element's keys are used.
     ffi::Result<ffi::AnyBuffer> out, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
     ffi::ResultBuffer<ffi::F32> lse, // total_q x num_heads
     ffi::ResultBuffer<ffi::F32> oaccum,
@@ -43,7 +43,6 @@ mha_varlen_fwd_impl(
     ffi::ResultBuffer<ffi::S64> rng_state,
     int max_seqlen_q,
     int max_seqlen_k,
-    bool has_seqused_k,
     float softmax_scale,
     bool zero_tensors,
     bool is_causal,
