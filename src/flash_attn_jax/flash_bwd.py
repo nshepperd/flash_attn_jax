@@ -1,10 +1,10 @@
 from functools import partial, wraps
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import core, dtypes
+from jax import Array, core, dtypes
 from jax.core import ShapedArray
 from jax.interpreters import batching
 from jax.interpreters import mlir
@@ -132,3 +132,33 @@ def _flash_mha_bwd_abstract(dout, q, k, v, o, lse, **keywords):
         ShapedArray(dv_shape, v_dtype),
     )
 _flash_mha_bwd_p.def_abstract_eval(_flash_mha_bwd_abstract)
+
+# ==== VMap rules ====
+
+def mha_bwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
+    assert all(isinstance(b, int) or b is None for b in batch_axes)
+    vector_arg_values, batch_axes = zip(*[(jnp.moveaxis(x, b, 0), 0) if b is not None else (x, b) for x, b in zip(vector_arg_values, batch_axes)])
+    mapped = tuple(isinstance(b, int) for b in batch_axes)
+    if mapped == (True, True, True, True, True, True):
+        x = vector_arg_values[0].shape[0]
+        do, q, k, v, o, lse = [einops.rearrange(val, 'x n ... -> (x n) ...') for val in vector_arg_values]
+        dq, dk, dv = _flash_mha_bwd_p.bind(do, q, k, v, o, lse, **kwargs)
+        dq = einops.rearrange(dq, '(n x) l h d -> x n l h d', x=x)
+        dk = einops.rearrange(dk, '(n x) l h d -> x n l h d', x=x)
+        dv = einops.rearrange(dv, '(n x) l h d -> x n l h d', x=x)
+        return (dq,dk,dv), (0,0,0)
+    elif mapped == (True, True, False, False, True, True):
+        # Everything is mapped except k and v, which is a GQA backward
+        x = vector_arg_values[0].shape[0]
+        do, q, k, v, o, lse = vector_arg_values
+        do = einops.rearrange(do, 'x n sq hq d -> n sq (hq x) d')
+        q = einops.rearrange(q, 'x n sq hq d -> n sq (hq x) d')
+        o = einops.rearrange(o, 'x n sq hq d -> n sq (hq x) d')
+        lse = einops.rearrange(lse, 'x n hq sq -> n (hq x) sq')
+        dq, dk, dv = _flash_mha_bwd_p.bind(do, q, k, v, o, lse, **kwargs)
+        dq = einops.rearrange(dq, 'n l (h x) d -> x n l h d', x=x)
+        return (dq,dk,dv), (0,None,None)
+    else:
+        raise NotImplementedError("MHA bwd only support vmapping over q or (q,k,v) for now, got batch axes " + str(batch_axes))
+
+batching.primitive_batchers[_flash_mha_bwd_p] = mha_bwd_batch

@@ -1,11 +1,12 @@
 import math
 from functools import partial, wraps
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import einops
 import jax
 import jax._src.dispatch
 import jax.numpy as jnp
+from jax import Array
 import numpy as np
 from einops import rearrange
 from jax import core, dtypes
@@ -139,3 +140,33 @@ def _flash_mha_fwd_abstract(q, k, v, **keywords):
         ShapedArray(lse_shape, jnp.float32)
     )
 _flash_mha_fwd_p.def_abstract_eval(_flash_mha_fwd_abstract)
+
+# ==== VMap rules ====
+
+def mha_fwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
+  assert all(isinstance(b, int) or b is None for b in batch_axes)
+  vector_arg_values, batch_axes = zip(*[(jnp.moveaxis(x, b, 0), 0) if b is not None else (x, b) for x, b in zip(vector_arg_values, batch_axes)])
+  mapped = tuple(isinstance(b, int) for b in batch_axes)
+  q, k, v = vector_arg_values
+  if mapped == (True, True, True):
+    x, n, sq, hq, d = q.shape
+    x, n, sk, hk, d = k.shape
+    out, lse = _flash_mha_fwd_p.bind(q.reshape((x*n, sq, hq, d)), 
+                                     k.reshape((x*n, sk, hk, d)), 
+                                     v.reshape((x*n, sk, hk, d)), 
+                                     **kwargs)
+    out = out.reshape((x, n, sq, hq, d))
+    lse = lse.reshape((x, n, hq, sq))
+    return (out, lse), (0,0)
+  elif mapped == (True, False, False):
+    # This is just a GQA!
+    x, n, sq, hq, d = q.shape
+    n, sk, hk, d = k.shape
+    q = einops.rearrange(q, 'x n sq hq d -> n sq (hq x) d')
+    out, lse = _flash_mha_fwd_p.bind(q, k, v, **kwargs)
+    out = einops.rearrange(out, 'n l (h x) d -> x n l h d', x=x)
+    lse = einops.rearrange(lse, 'n (h x) l -> x n h l', x=x)
+    return (out, lse), (0,0)
+  else:
+    raise NotImplementedError("MHA fwd only support vmapping over q or (q,k,v) for now, got batch axes " + str(batch_axes))
+batching.primitive_batchers[_flash_mha_fwd_p] = mha_fwd_batch
