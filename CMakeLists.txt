@@ -7,6 +7,18 @@ set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
+if(EXISTS ${Python_ROOT_DIR}/bin/python)
+    execute_process(
+        COMMAND ${Python_ROOT_DIR}/bin/python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
+        OUTPUT_VARIABLE PYTHON_SITE_PACKAGES
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message(STATUS "Python site-packages: ${PYTHON_SITE_PACKAGES}")
+    set(CMAKE_PREFIX_PATH 
+        ${PYTHON_SITE_PACKAGES}
+        ${Python_ROOT_DIR})
+endif()
+
 # == Find dependencies ==
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
