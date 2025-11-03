@@ -154,3 +154,42 @@ def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, seqused_k=None
         ShapedArray(lse_shape, jnp.float32)
     )
 _flash_mha_varlen_fwd_p.def_abstract_eval(_flash_mha_varlen_fwd_abstract)
+
+# ==== VMap rules ====
+
+def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool, **kwargs):
+    q, k, v, seqlens_q, seqlens_k, *rest = vector_arg_values
+    if has_seqused_k:
+        seqused_k, = rest
+    assert all(isinstance(b, int) or b is None for b in batch_axes)
+    assert isinstance(has_seqused_k, bool)
+    mapped = tuple(isinstance(b, int) for b in batch_axes)
+    if mapped == (True,)*5 or mapped == (True,)*6:
+        assert all(b == 0 or b is None for b in batch_axes), "Batch axis must be at front"
+        b, sq, hq, dq = q.shape
+        b, sk, hk, dk = k.shape
+        assert dq == dk
+        assert k.shape == v.shape
+        assert seqlens_q.shape == seqlens_k.shape
+        b, n = seqlens_q.shape
+        new_q = q.reshape((b*sq, hq, dq))
+        new_k = k.reshape((b*sk, hk, dk))
+        new_v = v.reshape((b*sk, hk, dk))
+        new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n,))
+        new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n,))
+        if has_seqused_k:
+            assert seqused_k.shape == (b, n-1)
+            new_seqused_k = jnp.pad(seqused_k, ((0,0),(0,1))).reshape((b*n,))[:-1]
+        else:
+            new_seqused_k = None
+        window_size = (kwargs.pop('window_size_left'), kwargs.pop('window_size_right'))
+        out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, new_seqlens_q, new_seqlens_k, new_seqused_k,
+                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, window_size=window_size, **kwargs)
+        # out: (b*sq) hq dq
+        # lse: (b*n-1) hq max_seqlen_q
+        new_out = out.reshape((b, sq, hq, dq))
+        new_lse = jnp.pad(lse, ((0,1),(0,0),(0,0))).reshape((b,n,hq,max_seqlen_q))[:,:-1]
+        return (new_out, new_lse), (0,0)
+    else:
+        raise NotImplementedError("flash_mha_varlen_fwd: vmap only for all inputs")
+batching.primitive_batchers[_flash_mha_varlen_fwd_p] = _flash_mha_varlen_fwd_batch

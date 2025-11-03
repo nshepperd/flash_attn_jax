@@ -188,3 +188,39 @@ def _flash_mha_varlen_bwd_abstract(dout, q, k, v, o, lse, seqlens_q, seqlens_k,
         ShapedArray(dv_shape, v_dtype),
     )
 _flash_mha_varlen_bwd_p.def_abstract_eval(_flash_mha_varlen_bwd_abstract)
+
+# ==== VMap rules ====
+
+def _flash_mha_varlen_bwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: int, max_seqlen_k: int, **kwargs):
+    dout, q, k, v, o, lse, seqlens_q, seqlens_k = vector_arg_values
+    assert all(isinstance(b, int) or b is None for b in batch_axes)
+    mapped = tuple(isinstance(b, int) for b in batch_axes)
+    if mapped == (True,)*8:
+        assert all(b == 0 or b is None for b in batch_axes), "Batch axis must be at front"
+        b, sq, hq, cq = q.shape
+        b, sk, hk, ck = k.shape
+        assert cq == ck
+        assert k.shape == v.shape
+        assert seqlens_q.shape == seqlens_k.shape
+        assert dout.shape == q.shape == o.shape
+        b, n = seqlens_q.shape
+        b, w, hlse, slse = lse.shape
+        assert hlse == hq and slse == max_seqlen_q
+        new_q = q.reshape((b*sq, hq, cq))
+        new_k = k.reshape((b*sk, hk, ck))
+        new_v = v.reshape((b*sk, hk, ck))
+        new_o = o.reshape((b*sq, hq, cq))
+        new_dout = dout.reshape((b*sq, hq, cq))
+        new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n,))
+        new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n,))
+        new_lse = lse.reshape((b*w, hlse, slse))
+        window_size = (kwargs.pop('window_size_left'), kwargs.pop('window_size_right'))
+        dq, dk, dv = flash_mha_varlen_bwd(new_dout, new_q, new_k, new_v, new_o, new_lse, new_seqlens_q, new_seqlens_k,
+                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, window_size=window_size, **kwargs)
+        dq = dq.reshape((b, sq, hq, cq))
+        dk = dk.reshape((b, sk, hk, ck))
+        dv = dv.reshape((b, sk, hk, ck))
+        return (dq, dk, dv), (0,0,0)
+    else:
+        raise NotImplementedError("flash_mha_varlen_fwd: vmap only for all inputs")
+batching.primitive_batchers[_flash_mha_varlen_bwd_p] = _flash_mha_varlen_bwd_batch
