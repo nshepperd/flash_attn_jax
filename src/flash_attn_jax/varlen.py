@@ -20,13 +20,11 @@ from .varlen_bwd import flash_mha_varlen_bwd
 from .varlen_fwd import flash_mha_varlen_fwd
 
 @partial(jax.custom_vjp, nondiff_argnums=(6,))
-def _flash_mha_varlen_vjp(q: jax.Array,k: jax.Array,v: jax.Array,seqlens_q: jax.Array, seqlens_k: jax.Array, seqused_k: jax.Array, config: dict):
+def _flash_mha_varlen_vjp(q: jax.Array, k: jax.Array, v: jax.Array, seqlens_q: jax.Array, seqlens_k: jax.Array, seqused_k: jax.Array, config: dict):
     config = dict(config)  # make a copy
-    config.pop('deterministic', None)  # not used in fwd
     return flash_mha_varlen_fwd(q,k,v, seqlens_q, seqlens_k, seqused_k, **config)[0]
 def _flash_mha_varlen_vjp_fwd(q,k,v,seqlens_q, seqlens_k, seqused_k, config):
     config = dict(config)  # make a copy
-    config.pop('deterministic', None)  # not used in fwd
     out, lse = flash_mha_varlen_fwd(q,k,v, seqlens_q, seqlens_k, seqused_k, **config)
     return out, (q,k,v,seqlens_q, seqlens_k, seqused_k, out,lse)
 def _flash_mha_varlen_vjp_bwd(config, pack, dout):
@@ -53,7 +51,7 @@ _flash_mha_varlen_vjp.defvjp(_flash_mha_varlen_vjp_fwd, _flash_mha_varlen_vjp_bw
 def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None, *,
                      max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                      softmax_scale: Optional[float] = None, is_causal: bool = False,
-                     window_size: tuple = (-1, -1), zero_tensors: bool = False):
+                     window_size: tuple = (-1, -1)):
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = dict(
@@ -61,6 +59,7 @@ def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None, *,
         max_seqlen_k=max_seqlen_k,
         softmax_scale=softmax_scale,
         is_causal=is_causal,
-        window_size=window_size,
+        window_size_left=window_size[0],
+        window_size_right=window_size[1],
     )
     return _flash_mha_varlen_vjp(q, k, v, seqlens_q, seqlens_k, seqused_k, config)

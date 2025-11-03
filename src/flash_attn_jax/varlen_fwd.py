@@ -20,6 +20,7 @@ from flash_attn_jax.util import num_splits_heuristic, round_multiple
 
 # ==== Register primitives ====
 
+# [n, sq, hq, d] [n, sk, sk, d] [n, sk, sk, d] [n, b+1] [n, b+1] [(optional) n, b] -> [n, sq, hq, d] [n, b, hq, max_seqlen_q]
 _flash_mha_varlen_fwd_p = Primitive("flash_mha_varlen_fwd")
 _flash_mha_varlen_fwd_p.multiple_results = True
 _flash_mha_varlen_fwd_p.def_impl(partial(xla.apply_primitive, _flash_mha_varlen_fwd_p))
@@ -31,16 +32,12 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
                          *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
-                         window_size: tuple[int,int] = (-1, -1),
-                         zero_tensors: bool = False):
-    if max_seqlen_q  == -1:
+                         window_size_left: int = -1, window_size_right: int = -1):
+    if max_seqlen_q == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
         max_seqlen_k = k.shape[0]
     assert seqlens_q.shape == seqlens_k.shape, "seqlens_q and seqlens_k must have the same shape."
-    d = q.shape[-1]
-    if softmax_scale is None:
-        softmax_scale = 1.0 / math.sqrt(d)
     has_seqused_k = seqused_k is not None
     kwargs = dict(
         max_seqlen_q=max_seqlen_q,
@@ -48,8 +45,8 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
         has_seqused_k=has_seqused_k,
         softmax_scale=softmax_scale,
         is_causal=is_causal,
-        window_size_left=window_size[0],
-        window_size_right=window_size[1],
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
     )
     if seqused_k is not None:
         return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, seqused_k, **kwargs))
@@ -58,72 +55,76 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
 
 # ==== HLO lowering ====
 
-def _flash_mha_varlen_fwd_hlo_lowering(ctx, *args,
+def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=None, *,
                                        max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool,
                                        softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
-    def fwd(q,k,v, seqlens_q, seqlens_k, seqused_k=None):
-        q_dtype = dtypes.canonicalize_dtype(q.dtype)
-        k_dtype = dtypes.canonicalize_dtype(k.dtype)
-        v_dtype = dtypes.canonicalize_dtype(v.dtype)
-        [totalq, h, d] = q.shape
-        b = seqlens_q.shape[0] - 1
-        assert q_dtype == k_dtype and q_dtype == v_dtype
-        assert q_dtype in [jnp.bfloat16, jnp.float16]
-        assert b >= 1
+    q_dtype = dtypes.canonicalize_dtype(q.dtype)
+    k_dtype = dtypes.canonicalize_dtype(k.dtype)
+    v_dtype = dtypes.canonicalize_dtype(v.dtype)
+    [totalq, h, d] = q.shape
+    b = seqlens_q.shape[0] - 1
+    assert q_dtype == k_dtype and q_dtype == v_dtype
+    assert q_dtype in [jnp.bfloat16, jnp.float16]
+    assert b >= 1
 
-        if d <= 64:
-            block_n = 256
-        elif d <= 128:
-            block_n = 128
-        else:
-            block_n = 64
-        num_n_blocks = max(1, (max_seqlen_k + block_n - 1) // block_n)
-        num_m_blocks = max(1, (max_seqlen_q + 64 - 1) // 64)
-        sm_count = 114 # H100
-        num_splits = num_splits_heuristic(b * h * num_m_blocks, sm_count, num_n_blocks, 128)
-        lseaccum_shape = (num_splits, b, h, max_seqlen_q)
-        oaccum_shape = (num_splits, b, max_seqlen_q, h, round_multiple(d, 32))
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
 
-        dpad = 8 - (d % 8)
-        if dpad > 0:
-            q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            v = jnp.pad(v, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+    if d <= 64:
+        block_n = 256
+    elif d <= 128:
+        block_n = 128
+    else:
+        block_n = 64
+    num_n_blocks = max(1, (max_seqlen_k + block_n - 1) // block_n)
+    num_m_blocks = max(1, (max_seqlen_q + 64 - 1) // 64)
+    sm_count = 114 # H100
+    num_splits = num_splits_heuristic(b * h * num_m_blocks, sm_count, num_n_blocks, 128)
+    lseaccum_shape = (num_splits, b, h, max_seqlen_q)
+    oaccum_shape = (num_splits, b, max_seqlen_q, h, round_multiple(d, 32))
 
-        out_shape = [totalq, h, d+dpad]
-        lse_shape = [b, h, max_seqlen_q]
+    dpad = 8 - (d % 8)
+    if dpad > 0:
+        q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        v = jnp.pad(v, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
 
-        out_types = [jax.ShapeDtypeStruct(out_shape, q_dtype), 
-                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
-                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
-                     jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
-                     jax.ShapeDtypeStruct((2,), jnp.int64)]
+    out_shape = [totalq, h, d+dpad]
+    lse_shape = [b, h, max_seqlen_q]
+
+    out_types = [jax.ShapeDtypeStruct(out_shape, q_dtype), 
+                    jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+                    jax.ShapeDtypeStruct((2,), jnp.int64)]
 
 
-        out, lse = jax.ffi.ffi_call(
-            "flash_mha_varlen_fwd", 
-            result_shape_dtypes=out_types,
-            has_side_effect=False,
-            input_layouts=[None]*(5 + (seqused_k is not None)), # default row major
-            output_layouts=[None]*5,
-            )(q, k, v, seqlens_q, seqlens_k, *[seqused_k] if seqused_k is not None else [],
-            max_seqlen_q=mlir.i32_attr(max_seqlen_q),
-            max_seqlen_k=mlir.i32_attr(max_seqlen_k),
-            softmax_scale=softmax_scale,
-            zero_tensors=False,
-            is_causal=is_causal,
-            window_size_left=window_size_left,
-            window_size_right=window_size_right)[:2]
-        
-        if dpad > 0:
-            out = out[:,:,:d]
+    out, lse = jax.ffi.ffi_call(
+        "flash_mha_varlen_fwd", 
+        result_shape_dtypes=out_types,
+        has_side_effect=False,
+        input_layouts=[None]*(5 + (seqused_k is not None)), # default row major
+        output_layouts=[None]*5,
+        )(q, k, v, seqlens_q, seqlens_k, *[seqused_k] if seqused_k is not None else [],
+        max_seqlen_q=mlir.i32_attr(max_seqlen_q),
+        max_seqlen_k=mlir.i32_attr(max_seqlen_k),
+        softmax_scale=softmax_scale,
+        zero_tensors=False,
+        is_causal=is_causal,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right)[:2]
+    
+    if dpad > 0:
+        out = out[:,:,:d]
 
-        return out, lse
-    return mlir.lower_fun(fwd, multiple_results=True)(ctx, *args)
+    return out, lse
+
+def _flash_mha_varlen_fwd_hlo_lowering_mlir(ctx, *args, **keywords):
+    return mlir.lower_fun(_flash_mha_varlen_fwd_hlo_lowering, multiple_results=True)(ctx, *args, **keywords)
 
 mlir.register_lowering(
     _flash_mha_varlen_fwd_p,
-    _flash_mha_varlen_fwd_hlo_lowering,  # type: ignore
+    _flash_mha_varlen_fwd_hlo_lowering_mlir,  # type: ignore
     platform="gpu",
 )
 
@@ -177,9 +178,8 @@ def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: 
             new_seqused_k = jnp.pad(seqused_k, ((0,0),(0,1))).reshape((b*n,))[:-1]
         else:
             new_seqused_k = None
-        window_size = (kwargs.pop('window_size_left'), kwargs.pop('window_size_right'))
         out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, new_seqlens_q, new_seqlens_k, new_seqused_k,
-                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, window_size=window_size, **kwargs)
+                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs)
         # out: (b*sq) hq dq
         # lse: (b*n-1) hq max_seqlen_q
         new_out = out.reshape((b, sq, hq, dq))

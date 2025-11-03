@@ -48,116 +48,113 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_bw
     # const bool deterministic)
 def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
-                         softmax_scale: Optional[float] = None, zero_tensors=False, is_causal: bool = False,
-                         window_size: tuple = (-1, -1), deterministic: bool = False):
+                         softmax_scale: Optional[float] = None, is_causal: bool = False,
+                         window_size_left: int = -1, window_size_right: int = -1):
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:
         max_seqlen_k = k.shape[0]
     assert seqlens_q.shape == seqlens_k.shape, "seqlens_q and seqlens_k must have the same shape."
-    d = q.shape[-1]
-    if softmax_scale is None:
-        softmax_scale = 1.0 / math.sqrt(d)
     kwargs = dict(
         max_seqlen_q=max_seqlen_q,
         max_seqlen_k=max_seqlen_k,
         softmax_scale=softmax_scale,
-        zero_tensors=zero_tensors,
         is_causal=is_causal,
-        window_size_left=window_size[0],
-        window_size_right=window_size[1],
-        deterministic=deterministic,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
     )
     return tuple(_flash_mha_varlen_bwd_p.bind(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_varlen_bwd_hlo_lowering(ctx, dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
+def _flash_mha_varlen_bwd_hlo_lowering(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                                        max_seqlen_q: int, max_seqlen_k: int,
-                                       softmax_scale: float, zero_tensors: bool,
-                                       is_causal: bool, window_size_left: int, window_size_right: int,
-                                       deterministic: bool):
-    def bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k):
-        q_dtype = dtypes.canonicalize_dtype(q.dtype)
-        k_dtype = dtypes.canonicalize_dtype(k.dtype)
-        v_dtype = dtypes.canonicalize_dtype(v.dtype)
-        [totalq, h, d] = q.shape
-        [totalk, hk, dk] = k.shape
-        b = seqlens_q.shape[0] - 1
-        assert q_dtype == k_dtype and q_dtype == v_dtype
-        assert q_dtype in [jnp.bfloat16, jnp.float16]
-        assert b >= 1
-        assert d == dk, "q and k must have the same head size."
+                                       softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+    q_dtype = dtypes.canonicalize_dtype(q.dtype)
+    k_dtype = dtypes.canonicalize_dtype(k.dtype)
+    v_dtype = dtypes.canonicalize_dtype(v.dtype)
+    [totalq, h, d] = q.shape
+    [totalk, hk, dk] = k.shape
+    b = seqlens_q.shape[0] - 1
+    assert q_dtype == k_dtype and q_dtype == v_dtype
+    assert q_dtype in [jnp.bfloat16, jnp.float16]
+    assert b >= 1
+    assert d == dk, "q and k must have the same head size."
 
-        dpad = 8 - (d % 8)
-        if dpad > 0:
-            q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            v = jnp.pad(v, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            dout = jnp.pad(dout, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
-            o = jnp.pad(o, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
 
-        dq_shape = [totalq, h, d+dpad]
-        dk_shape = [totalk, h, d+dpad]
-        dv_shape = [totalk, h, d+dpad]
+    dpad = 8 - (d % 8)
+    if dpad > 0:
+        q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        v = jnp.pad(v, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        dout = jnp.pad(dout, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
+        o = jnp.pad(o, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
 
-        # Calculate scratch array shapes
-        seqlen_q_rounded = round_multiple(max_seqlen_q, 128)
-        d_rounded = round_multiple(d+dpad, 32)
-        softmax_d_shape = (b, h, seqlen_q_rounded)
-        
-        # Calculate nsplits for deterministic mode (varlen-specific)
-        sm_count = 114  # H100, should ideally get this from device query
-        if deterministic:
-            nsplits = max(1, (sm_count + b * h - 1) // (b * h))
-            dq_accum_shape = (nsplits, totalq + 128 * b, h, d_rounded)  # varlen-specific sizing with splits
-        else:
-            dq_accum_shape = (totalq + 128 * b, h, d_rounded)  # varlen-specific sizing
-        
-        rng_state_shape = (2,)
+    dq_shape = [totalq, h, d+dpad]
+    dk_shape = [totalk, h, d+dpad]
+    dv_shape = [totalk, h, d+dpad]
 
-        out_types = [jax.ShapeDtypeStruct(dq_shape, q_dtype),              # dq
-                        jax.ShapeDtypeStruct(dk_shape, k_dtype),           # dk
-                        jax.ShapeDtypeStruct(dv_shape, v_dtype),           # dv
-                        jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32), # softmax_d
-                        jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),  # dq_accum
-                        jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]   # rng_state
+    # Calculate scratch array shapes
+    seqlen_q_rounded = round_multiple(max_seqlen_q, 128)
+    d_rounded = round_multiple(d+dpad, 32)
+    softmax_d_shape = (b, h, seqlen_q_rounded)
+    
+    # Calculate nsplits for deterministic mode (varlen-specific)
+    sm_count = 114  # H100, should ideally get this from device query
+    if False: # deterministic mode
+        nsplits = max(1, (sm_count + b * h - 1) // (b * h))
+        dq_accum_shape = (nsplits, totalq + 128 * b, h, d_rounded)  # varlen-specific sizing with splits
+    else:
+        dq_accum_shape = (totalq + 128 * b, h, d_rounded)  # varlen-specific sizing
+    
+    rng_state_shape = (2,)
 
-        kwargs = dict(
-            max_seqlen_q=mlir.i64_attr(max_seqlen_q),
-            max_seqlen_k=mlir.i64_attr(max_seqlen_k),
-            softmax_scale=mlir.ir.FloatAttr.get_f32(softmax_scale),
-            zero_tensors=zero_tensors,
-            is_causal=is_causal,
-            window_size_left=mlir.i64_attr(window_size_left),
-            window_size_right=mlir.i64_attr(window_size_right),
-            deterministic=deterministic,
-        )
-        dq, dk, dv = jax.ffi.ffi_call(
-            "flash_mha_varlen_bwd", 
-            result_shape_dtypes=out_types,
-            has_side_effect=False,
-            input_layouts=[None]*8, # default row major
-            output_layouts=[None]*6,
-            )(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs)[:3]  # Only return first 3 outputs (dq, dk, dv)
-        
-        if dpad > 0:
-            dq = dq[:,:,:d]
-            dk = dk[:,:,:d]
-            dv = dv[:,:,:d]
-        
-        if h > hk:
-            # MQA
-            assert h % hk == 0, "h must be divisible by hk for MQA."
-            dk = einops.reduce(dk, "b (hk m) d -> b hk d", hk=hk, reduction="sum")
-            dv = einops.reduce(dv, "b (hk m) d -> b hk d", hk=hk, reduction="sum")
+    out_types = [jax.ShapeDtypeStruct(dq_shape, q_dtype),              # dq
+                    jax.ShapeDtypeStruct(dk_shape, k_dtype),           # dk
+                    jax.ShapeDtypeStruct(dv_shape, v_dtype),           # dv
+                    jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32), # softmax_d
+                    jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),  # dq_accum
+                    jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]   # rng_state
 
-        return dq, dk, dv
-    return mlir.lower_fun(bwd, multiple_results=True)(ctx, dout, q, k, v, o, lse, seqlens_q, seqlens_k)
+    kwargs = dict(
+        max_seqlen_q=mlir.i64_attr(max_seqlen_q),
+        max_seqlen_k=mlir.i64_attr(max_seqlen_k),
+        softmax_scale=mlir.ir.FloatAttr.get_f32(softmax_scale),
+        zero_tensors=False,
+        is_causal=is_causal,
+        window_size_left=mlir.i64_attr(window_size_left),
+        window_size_right=mlir.i64_attr(window_size_right),
+        deterministic=False,
+    )
+    dq, dk, dv = jax.ffi.ffi_call(
+        "flash_mha_varlen_bwd", 
+        result_shape_dtypes=out_types,
+        has_side_effect=False,
+        input_layouts=[None]*8, # default row major
+        output_layouts=[None]*6,
+        )(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs)[:3]  # Only return first 3 outputs (dq, dk, dv)
+    
+    if dpad > 0:
+        dq = dq[:,:,:d]
+        dk = dk[:,:,:d]
+        dv = dv[:,:,:d]
+    
+    if h > hk:
+        # MQA
+        assert h % hk == 0, "h must be divisible by hk for MQA."
+        dk = einops.reduce(dk, "b (hk m) d -> b hk d", hk=hk, reduction="sum")
+        dv = einops.reduce(dv, "b (hk m) d -> b hk d", hk=hk, reduction="sum")
+
+    return dq, dk, dv
+
+def _flash_mha_varlen_bwd_hlo_lowering_mlir(ctx, *args, **keywords):
+    return mlir.lower_fun(_flash_mha_varlen_bwd_hlo_lowering, multiple_results=True)(ctx, *args, **keywords)
 
 mlir.register_lowering(
     _flash_mha_varlen_bwd_p,
-    _flash_mha_varlen_bwd_hlo_lowering,  # type: ignore
+    _flash_mha_varlen_bwd_hlo_lowering_mlir,  # type: ignore
     platform="gpu",
 )
 
@@ -165,9 +162,8 @@ mlir.register_lowering(
 
 def _flash_mha_varlen_bwd_abstract(dout, q, k, v, o, lse, seqlens_q, seqlens_k,
                                    max_seqlen_q: int, max_seqlen_k: int,
-                                   softmax_scale: float, zero_tensors: bool,
-                                   is_causal: bool, window_size_left: int, window_size_right: int,
-                                   deterministic: bool):
+                                   softmax_scale: float,
+                                   is_causal: bool, window_size_left: int, window_size_right: int):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
     v_dtype = dtypes.canonicalize_dtype(v.dtype)
@@ -213,9 +209,8 @@ def _flash_mha_varlen_bwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: 
         new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n,))
         new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n,))
         new_lse = lse.reshape((b*w, hlse, slse))
-        window_size = (kwargs.pop('window_size_left'), kwargs.pop('window_size_right'))
         dq, dk, dv = flash_mha_varlen_bwd(new_dout, new_q, new_k, new_v, new_o, new_lse, new_seqlens_q, new_seqlens_k,
-                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, window_size=window_size, **kwargs)
+                                        max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs)
         dq = dq.reshape((b, sq, hq, cq))
         dk = dk.reshape((b, sk, hk, ck))
         dv = dv.reshape((b, sk, hk, ck))
