@@ -10,6 +10,23 @@
           "isDefault": true
         },
         "problemMatcher": []
+      },
+      {
+        "label": "build and install",
+        "type": "shell",
+        "command": ["uv", "pip", "install", "--verbose", "."],
+        "problemMatcher": []
+      },
+      {
+        "label": "generate kernels",
+        "type": "shell",
+        "command": [
+          "python",
+          "csrc/flash_attn/src/generate_kernels.py",
+          "-o",
+          "csrc/flash_attn/src/"
+        ],
+        "problemMatcher": []
       }
     ]
   }

@@ -5,7 +5,11 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
     "files.exclude": {
-        "__pycache__": true
+        "__pycache__": true,
+        ".venv": true,
+        "build": true,
+        ".cache": true,
+        ".pytest_cache": true,
     },
     "cmake.configureArgs": [
         "-DPython_ROOT_DIR=${workspaceFolder}/.venv",
