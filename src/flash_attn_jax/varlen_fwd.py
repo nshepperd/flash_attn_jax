@@ -167,24 +167,32 @@ def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: 
         assert dq == dk
         assert k.shape == v.shape
         assert seqlens_q.shape == seqlens_k.shape
-        b, n = seqlens_q.shape
+        b, n_plus_1 = seqlens_q.shape
+        n = n_plus_1 - 1
         new_q = q.reshape((b*sq, hq, dq))
         new_k = k.reshape((b*sk, hk, dk))
         new_v = v.reshape((b*sk, hk, dk))
-        new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n,))
-        new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n,))
+        new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n_plus_1,))
+        new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n_plus_1,))
         if has_seqused_k:
-            assert seqused_k.shape == (b, n-1)
-            new_seqused_k = jnp.pad(seqused_k, ((0,0),(0,1))).reshape((b*n,))[:-1]
+            assert seqused_k.shape == (b, n)
+            new_seqused_k = jnp.pad(seqused_k, ((0,0),(0,1))).reshape((b*n_plus_1,))[:-1]
         else:
             new_seqused_k = None
         out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, new_seqlens_q, new_seqlens_k, new_seqused_k,
                                         max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs)
         # out: (b*sq) hq dq
-        # lse: (b*n-1) hq max_seqlen_q
+        # lse: (b*n_plus_1-1) hq max_seqlen_q
         new_out = out.reshape((b, sq, hq, dq))
-        new_lse = jnp.pad(lse, ((0,1),(0,0),(0,0))).reshape((b,n,hq,max_seqlen_q))[:,:-1]
+        new_lse = jnp.pad(lse, ((0,1),(0,0),(0,0))).reshape((b,n_plus_1,hq,max_seqlen_q))[:,:-1]
         return (new_out, new_lse), (0,0)
+    elif mapped == (0, 1, 1, 0, 1):
+        # broadcasting q over k,v with different seqlens_k
+        x = k.shape[0]
+        q = einops.repeat(q, '... -> x ...', x=x)
+        seqlens_q = einops.repeat(seqlens_q, '... -> x ...', x=x)
+        out, lse = jax.vmap(partial(flash_mha_varlen_fwd, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs))(q, k, v, seqlens_q, seqlens_k)
+        return (out, lse), (0,0)
     else:
         raise NotImplementedError("flash_mha_varlen_fwd: vmap only for all inputs")
 batching.primitive_batchers[_flash_mha_varlen_fwd_p] = _flash_mha_varlen_fwd_batch

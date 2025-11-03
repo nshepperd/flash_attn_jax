@@ -52,6 +52,8 @@ def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, seqused_k=None, *,
                      max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                      softmax_scale: Optional[float] = None, is_causal: bool = False,
                      window_size: tuple = (-1, -1)):
+    if window_size != (-1, -1):
+        assert seqused_k is None, "seqused_k is not supported with local attention."
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = dict(
