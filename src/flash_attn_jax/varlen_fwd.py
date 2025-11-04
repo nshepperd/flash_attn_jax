@@ -83,7 +83,7 @@ def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=No
     lseaccum_shape = (num_splits, b, h, max_seqlen_q)
     oaccum_shape = (num_splits, b, max_seqlen_q, h, round_multiple(d, 32))
 
-    dpad = 8 - (d % 8)
+    dpad = (8 - (d % 8)) % 8
     if dpad > 0:
         q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
         k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)

@@ -84,7 +84,7 @@ def _flash_mha_varlen_bwd_hlo_lowering(dout, q, k, v, o, lse, seqlens_q, seqlens
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
 
-    dpad = 8 - (d % 8)
+    dpad = (8 - (d % 8)) % 8
     if dpad > 0:
         q = jnp.pad(q, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
         k = jnp.pad(k, ((0, 0), (0, 0), (0, dpad)), mode='constant', constant_values=0)
