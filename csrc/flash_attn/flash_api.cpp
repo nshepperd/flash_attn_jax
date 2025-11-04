@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
 #include "check.h"
 
@@ -295,11 +295,13 @@ namespace ffi = xla::ffi;
 
 namespace {
 
+namespace nb = nanobind;
+
 template <typename T>
-pybind11::capsule EncapsulateFfiCall(T *fn) {
+nb::capsule EncapsulateFfiCall(T *fn) {
   static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
                 "Encapsulated function must be an XLA FFI handler");
-  return pybind11::capsule(reinterpret_cast<void *>(fn));
+  return nb::capsule(reinterpret_cast<void *>(fn));
 }
 
 XLA_FFI_DEFINE_HANDLER(
@@ -399,8 +401,8 @@ XLA_FFI_DEFINE_HANDLER(
 		.Attr<bool>("deterministic")
 );
 
-pybind11::dict FFIRegistrations() {
-  pybind11::dict dict;
+nb::dict FFIRegistrations() {
+  nb::dict dict;
   dict["flash_mha_fwd"] = EncapsulateFfiCall(mha_fwd);
   dict["flash_mha_bwd"] = EncapsulateFfiCall(mha_bwd);
   dict["flash_mha_varlen_fwd"] = EncapsulateFfiCall(mha_varlen_fwd);
@@ -409,7 +411,7 @@ pybind11::dict FFIRegistrations() {
 }
 
 
-PYBIND11_MODULE(flash_api, m) {
+NB_MODULE(flash_api, m) {
     m.doc() = "FlashAttention";
 	m.def("get_ffi_registrations", &FFIRegistrations);
 

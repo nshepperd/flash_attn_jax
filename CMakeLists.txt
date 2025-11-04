@@ -14,6 +14,7 @@ if(EXISTS ${Python_ROOT_DIR}/bin/python)
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     message(STATUS "Python site-packages: ${PYTHON_SITE_PACKAGES}")
+    set(Python_EXECUTABLE ${Python_ROOT_DIR}/bin/python)
     set(CMAKE_PREFIX_PATH 
         ${PYTHON_SITE_PACKAGES}
         ${Python_ROOT_DIR})
@@ -25,12 +26,12 @@ find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 message(STATUS "Python executable: ${Python_EXECUTABLE}")
 
 execute_process(
-    COMMAND ${Python_EXECUTABLE} -m pybind11 --cmakedir
-    OUTPUT_VARIABLE pybind11_DIR
+    COMMAND ${Python_EXECUTABLE} -m nanobind --cmake_dir
+    OUTPUT_VARIABLE nanobind_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-find_package(pybind11 CONFIG REQUIRED)
+find_package(nanobind CONFIG REQUIRED)
 
 # == Setup CUDA ==
 string(REGEX REPLACE "--generate-code=arch=compute_[0-9]+,code=\\[?compute_[0-9]+,sm_[0-9]+\\]?" "" 
@@ -92,7 +93,7 @@ file(GLOB CC_SOURCES
 )
 
 # Create CUDA extension
-pybind11_add_module(flash_api
+nanobind_add_module(flash_api
     ${CC_SOURCES}
     ${CUDA_SOURCES}
 )

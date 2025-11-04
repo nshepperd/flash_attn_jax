@@ -5,7 +5,7 @@ requires = [
     "ninja>=1.10",
     "packaging",
     "psutil",
-    "pybind11>=2.11.0",
+    "nanobind>=2.0.0",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -21,6 +21,7 @@ authors = [
     { name = "Emily Shepperd", email = "em@zlkj.in" }
 ]
 dependencies = [
+    "nanobind>=2.0.0",
     "jax>=0.5.0, <0.8.0"
 ]
 classifiers = [

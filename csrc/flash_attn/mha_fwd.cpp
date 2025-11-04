@@ -6,7 +6,6 @@
 #include <stddef.h>
 #include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
-#include <pybind11/pybind11.h>
 
 #include "flash.h"
 #include "static_switch.h"

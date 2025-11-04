@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <cuda_runtime_api.h>
 #include <cutlass/numeric_types.h>
-#include <pybind11/pybind11.h>
 #include <stddef.h>
 
 #include "xla/ffi/api/ffi.h"

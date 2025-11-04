@@ -2,7 +2,6 @@
 #include <cutlass/numeric_types.h>
 #include <cute/layout.hpp>
 #include <cuda_runtime_api.h>
-#include <pybind11/pybind11.h>
 
 #include "flash.h"
 #include "check.h"
