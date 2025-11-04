@@ -154,14 +154,14 @@ _flash_mha_varlen_fwd_p.def_abstract_eval(_flash_mha_varlen_fwd_abstract)
 # ==== VMap rules ====
 
 def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool, **kwargs):
+    # move mapping axes to the front
+    vector_arg_values, batch_axes = zip(*[(jnp.moveaxis(x, b, 0), 0) if b is not None else (x, b) for x, b in zip(vector_arg_values, batch_axes)])
     q, k, v, seqlens_q, seqlens_k, *rest = vector_arg_values
     if has_seqused_k:
         seqused_k, = rest
     assert all(isinstance(b, int) or b is None for b in batch_axes)
     assert isinstance(has_seqused_k, bool)
-    mapped = tuple(isinstance(b, int) for b in batch_axes)
-    if mapped == (True,)*5 or mapped == (True,)*6:
-        assert all(b == 0 or b is None for b in batch_axes), "Batch axis must be at front"
+    if batch_axes in ((0,0,0,0,0),(0,0,0,0,0,0)):
         b, sq, hq, dq = q.shape
         b, sk, hk, dk = k.shape
         assert dq == dk
@@ -186,13 +186,19 @@ def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: 
         new_out = out.reshape((b, sq, hq, dq))
         new_lse = jnp.pad(lse, ((0,1),(0,0),(0,0))).reshape((b,n_plus_1,hq,max_seqlen_q))[:,:-1]
         return (new_out, new_lse), (0,0)
-    elif mapped == (0, 1, 1, 0, 1):
+    elif batch_axes == (None, 0, 0, None, 0):
         # broadcasting q over k,v with different seqlens_k
         x = k.shape[0]
         q = einops.repeat(q, '... -> x ...', x=x)
         seqlens_q = einops.repeat(seqlens_q, '... -> x ...', x=x)
         out, lse = jax.vmap(partial(flash_mha_varlen_fwd, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs))(q, k, v, seqlens_q, seqlens_k)
         return (out, lse), (0,0)
+    elif batch_axes == (0, 0, 0, None, 0):
+        # broadcast seqlens_q
+        x = q.shape[0]
+        seqlens_q = einops.repeat(seqlens_q, '... -> x ...', x=x)
+        out, lse = jax.vmap(partial(flash_mha_varlen_fwd, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs))(q, k, v, seqlens_q, seqlens_k)
+        return (out, lse), (0,0)
     else:
-        raise NotImplementedError("flash_mha_varlen_fwd: vmap only for all inputs")
+        raise NotImplementedError(f"flash_mha_varlen_fwd: unsupported vmap: {batch_axes}")
 batching.primitive_batchers[_flash_mha_varlen_fwd_p] = _flash_mha_varlen_fwd_batch
