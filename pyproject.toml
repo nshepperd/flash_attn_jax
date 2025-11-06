@@ -49,6 +49,8 @@ ninja.version = ">=1.11"
 build.verbose = true
 cmake.build-type = "Release"
 cmake.args = []
+wheel.packages = ["src/flash_attn_jax"]
+wheel.install-dir = "flash_attn_jax"
 
 [tool.scikit-build.cmake.define]
 SKBUILD = "ON"
