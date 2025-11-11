@@ -199,6 +199,16 @@ def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: 
         seqlens_q = einops.repeat(seqlens_q, '... -> x ...', x=x)
         out, lse = jax.vmap(partial(flash_mha_varlen_fwd, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs))(q, k, v, seqlens_q, seqlens_k)
         return (out, lse), (0,0)
+    elif batch_axes == (0, 0, 0, None, None):
+        # broadcast seqlens_q & seqlens_k over batches of q/k/v is the same as doing more heads
+        x = q.shape[0]
+        new_q = rearrange(q, 'x sq hq dq -> sq (x hq) dq')
+        new_k = rearrange(k, 'x sk hk dk -> sk (x hk) dk')
+        new_v = rearrange(v, 'x sk hk dk -> sk (x hk) dk')
+        out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, seqlens_q, seqlens_k, max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs)
+        new_out = rearrange(out, 'sq (x hq) dq -> x sq hq dq', x=x)
+        new_lse = rearrange(lse, 'n (x hq) mseq -> x n hq mseq', x=x)
+        return (new_out, new_lse), (0,0)
     else:
         raise NotImplementedError(f"flash_mha_varlen_fwd: unsupported vmap: {batch_axes}")
 batching.primitive_batchers[_flash_mha_varlen_fwd_p] = _flash_mha_varlen_fwd_batch
