@@ -14,7 +14,7 @@
       {
         "label": "build and install",
         "type": "shell",
-        "command": ["uv", "pip", "install", "--verbose", "."],
+        "command": ["uv", "pip", "install", "--verbose", "-e", "."],
         "problemMatcher": []
       },
       {
