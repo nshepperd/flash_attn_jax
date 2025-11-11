@@ -80,6 +80,10 @@ set(CUDA_FLAGS
     -DFLASHATTENTION_DISABLE_DROPOUT=1
     -DFLASHATTENTION_DISABLE_ALIBI=1
 )
+set(CXX_FLAGS
+    -DFLASHATTENTION_DISABLE_DROPOUT=1
+    -DFLASHATTENTION_DISABLE_ALIBI=1
+)
 
 # Collect source files
 file(GLOB CUDA_SOURCES 
@@ -102,6 +106,7 @@ set_property(TARGET flash_api PROPERTY JOB_POOL_COMPILE cuda)
 
 target_compile_options(flash_api PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>
+    $<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS}>
 )
 
 target_include_directories(flash_api PRIVATE
