@@ -39,7 +39,6 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
     ffi::ResultBuffer<ffi::F32> lse,
     ffi::ResultBuffer<ffi::F32> oaccum,
     ffi::ResultBuffer<ffi::F32> lseaccum,
-    ffi::ResultBuffer<ffi::S64> rng_state,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
@@ -132,15 +131,6 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
                         dtype, max_splits, oaccum->untyped_data(), lseaccum->untyped_data()));
 
     int64_t counter_offset = params.b * params.h * 32;
-    // auto rng_state = scratch.Allocate(2 * sizeof(uint64_t), 8); // 2 * float64
-    // FFI_CHECK(rng_state.has_value()) << "Failed to allocate memory for RNG state";
-    params.rng_state = reinterpret_cast<uint64_t*>(rng_state->untyped_data());
-
-    // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
-    // auto rng_state = torch::empty({2}, options.dtype(torch::kInt64));
-    // // Forward kernel will populate memory with the seed and offset.
-    // params.rng_state = reinterpret_cast<uint64_t*>(rng_state.data_ptr());
-
 
     params.alibi_slopes_ptr = nullptr;
 
@@ -171,7 +161,6 @@ mha_varlen_fwd_impl(
     ffi::ResultBuffer<ffi::F32> lse, // batch_size x num_heads x max_seqlen_q
     ffi::ResultBuffer<ffi::F32> oaccum,
     ffi::ResultBuffer<ffi::F32> lseaccum,
-    ffi::ResultBuffer<ffi::S64> rng_state,
     int max_seqlen_q,
     int max_seqlen_k,
     float softmax_scale,
@@ -335,11 +324,6 @@ mha_varlen_fwd_impl(
                            max_splits, oaccum->untyped_data(), lseaccum->untyped_data()
                         );
     }
-
-    // Forward kernel will populate memory with the seed and offset.
-    // auto rng_state = scratch.Allocate(2 * 8, 8); // 2 * int64
-    // params.rng_state = (uint64_t*)rng_state.value();
-    params.rng_state = (uint64_t*)rng_state->untyped_data();
 
     params.alibi_slopes_ptr = nullptr;
 

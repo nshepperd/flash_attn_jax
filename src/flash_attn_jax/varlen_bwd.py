@@ -109,14 +109,11 @@ def _flash_mha_varlen_bwd_hlo_lowering(dout, q, k, v, o, lse, seqlens_q, seqlens
     else:
         dq_accum_shape = (totalq + 128 * b, h, d_rounded)  # varlen-specific sizing
     
-    rng_state_shape = (2,)
-
     out_types = [jax.ShapeDtypeStruct(dq_shape, q_dtype),              # dq
                     jax.ShapeDtypeStruct(dk_shape, k_dtype),           # dk
                     jax.ShapeDtypeStruct(dv_shape, v_dtype),           # dv
                     jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32), # softmax_d
-                    jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),  # dq_accum
-                    jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]   # rng_state
+                    jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32)]  # dq_accum
 
     kwargs = dict(
         max_seqlen_q=mlir.i64_attr(max_seqlen_q),
@@ -133,7 +130,7 @@ def _flash_mha_varlen_bwd_hlo_lowering(dout, q, k, v, o, lse, seqlens_q, seqlens
         result_shape_dtypes=out_types,
         has_side_effect=False,
         input_layouts=[None]*8, # default row major
-        output_layouts=[None]*6,
+        output_layouts=[None]*5,
         )(dout, q, k, v, o, lse, seqlens_q, seqlens_k, **kwargs)[:3]  # Only return first 3 outputs (dq, dk, dv)
     
     if dpad > 0:

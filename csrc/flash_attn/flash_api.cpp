@@ -316,7 +316,6 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::Buffer<ffi::F32>>()
 		.Ret<ffi::Buffer<ffi::F32>>()
 		.Ret<ffi::Buffer<ffi::F32>>()
-		.Ret<ffi::Buffer<ffi::S64>>()
 		.Attr<double>("softmax_scale")
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
@@ -339,7 +338,6 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::AnyBuffer>() // dv
 		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
 		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
-		.Ret<ffi::Buffer<ffi::S64>>() // rng_state
 		.Attr<double>("softmax_scale")
 		.Attr<bool>("is_causal")
 		.Attr<int64_t>("window_size_left")
@@ -362,7 +360,6 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::Buffer<ffi::F32>>() // lse
 		.Ret<ffi::Buffer<ffi::F32>>()
 		.Ret<ffi::Buffer<ffi::F32>>()
-		.Ret<ffi::Buffer<ffi::S64>>()
 		.Attr<int>("max_seqlen_q")
 		.Attr<int>("max_seqlen_k")
 		.Attr<double>("softmax_scale")
@@ -390,7 +387,6 @@ XLA_FFI_DEFINE_HANDLER(
 		.Ret<ffi::AnyBuffer>() // dv
 		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
 		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
-		.Ret<ffi::Buffer<ffi::S64>>() // rng_state
 		.Attr<int64_t>("max_seqlen_q")
 		.Attr<int64_t>("max_seqlen_k")
 		.Attr<float>("softmax_scale")

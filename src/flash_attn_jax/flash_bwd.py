@@ -72,21 +72,18 @@ def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is
     else:
         dq_accum_shape = (n, lq_rounded, hq, d_rounded)
     
-    rng_state_shape = (2,)
-    
     out_types = [jax.ShapeDtypeStruct((n, lq, hq, d+dpad), dtype),  # dq
                 jax.ShapeDtypeStruct((n, lk, hq, d+dpad), dtype),   # dk
                 jax.ShapeDtypeStruct((n, lk, hq, d+dpad), dtype),   # dv
                 jax.ShapeDtypeStruct(softmax_d_shape, jnp.float32),     # softmax_d
-                jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32),      # dq_accum
-                jax.ShapeDtypeStruct(rng_state_shape, jnp.int64)]       # rng_state
+                jax.ShapeDtypeStruct(dq_accum_shape, jnp.float32)]       # rng_state
 
     dq, dk, dv = jax.ffi.ffi_call(
         "flash_mha_bwd",
         result_shape_dtypes=out_types,
         has_side_effect=False,
         input_layouts=[None]*6, # default row major
-        output_layouts=[None]*6,
+        output_layouts=[None]*5,
         )(dout, q, k, v, out, lse,
           softmax_scale=softmax_scale,
         is_causal=is_causal,

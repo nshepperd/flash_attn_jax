@@ -101,7 +101,6 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, w
                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
                     jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
-                    jax.ShapeDtypeStruct((2,), jnp.int64),
                     ]
 
     o, lse = jax.ffi.ffi_call(
@@ -109,7 +108,7 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, w
         result_shape_dtypes=out_types,
         has_side_effect=False,
         input_layouts=[None, None, None], # default row major
-        output_layouts=[None, None, None, None, None],
+        output_layouts=[None, None, None, None],
         )(q, k, v, softmax_scale=softmax_scale,
         is_causal=is_causal,
         window_size_left=window_size_left,

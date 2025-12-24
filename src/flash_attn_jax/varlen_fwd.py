@@ -95,8 +95,7 @@ def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=No
     out_types = [jax.ShapeDtypeStruct(out_shape, q_dtype), 
                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
-                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
-                    jax.ShapeDtypeStruct((2,), jnp.int64)]
+                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32)]
 
 
     out, lse = jax.ffi.ffi_call(
@@ -104,7 +103,7 @@ def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=No
         result_shape_dtypes=out_types,
         has_side_effect=False,
         input_layouts=[None]*(5 + (seqused_k is not None)), # default row major
-        output_layouts=[None]*5,
+        output_layouts=[None]*4,
         )(q, k, v, seqlens_q, seqlens_k, *[seqused_k] if seqused_k is not None else [],
         max_seqlen_q=mlir.i32_attr(max_seqlen_q),
         max_seqlen_k=mlir.i32_attr(max_seqlen_k),

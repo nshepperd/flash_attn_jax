@@ -19,7 +19,6 @@ ffi::Error mha_fwd_impl(
     ffi::ResultBuffer<ffi::F32> lse,
     ffi::ResultBuffer<ffi::F32> oaccum,
     ffi::ResultBuffer<ffi::F32> lseaccum,
-    ffi::ResultBuffer<ffi::S64> rng_state,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
@@ -39,7 +38,6 @@ mha_varlen_fwd_impl(
     ffi::ResultBuffer<ffi::F32> lse, // total_q x num_heads
     ffi::ResultBuffer<ffi::F32> oaccum,
     ffi::ResultBuffer<ffi::F32> lseaccum,
-    ffi::ResultBuffer<ffi::S64> rng_state,
     int max_seqlen_q,
     int max_seqlen_k,
     float softmax_scale,

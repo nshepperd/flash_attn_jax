@@ -443,7 +443,7 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         cute::copy(smem_tiled_copy_KV, tdPsV, tdPrV_copy_view);
     }
 
-    flash::Dropout dropout(params.rng_state[0], params.rng_state[1], params.p_dropout_in_uint8_t,
+    flash::Dropout dropout(0, 0, params.p_dropout_in_uint8_t,
                            bidb, bidh, tidx, params.h);
 
     clear(acc_dv);
