@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 
+# Get CUDA architectures from environment or use default
+if(DEFINED ENV{FLASH_ATTN_CUDA_ARCHS})
+    set(CMAKE_CUDA_ARCHITECTURES $ENV{FLASH_ATTN_CUDA_ARCHS})
+else()
+    # set(CMAKE_CUDA_ARCHITECTURES "80;90;100;120")
+    set(CMAKE_CUDA_ARCHITECTURES "80")
+endif()
+
 project(flash_attn LANGUAGES CXX CUDA)
 
 set(CMAKE_JOB_POOLS cuda=6)
@@ -49,13 +57,7 @@ if(CCACHE_PROGRAM)
 endif()
 
 # CUDA handling
-# Get CUDA architectures from environment or use default
-if(DEFINED ENV{FLASH_ATTN_CUDA_ARCHS})
-    set(CMAKE_CUDA_ARCHITECTURES $ENV{FLASH_ATTN_CUDA_ARCHS})
-else()
-    # set(CMAKE_CUDA_ARCHITECTURES "80;90;100;120")
-    set(CMAKE_CUDA_ARCHITECTURES "80") 
-endif()
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
 find_package(CUDAToolkit REQUIRED)
 
