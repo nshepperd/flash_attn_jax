@@ -42,10 +42,6 @@ execute_process(
 find_package(nanobind CONFIG REQUIRED)
 
 # == Setup CUDA ==
-string(REGEX REPLACE "--generate-code=arch=compute_[0-9]+,code=\\[?compute_[0-9]+,sm_[0-9]+\\]?" "" 
-       CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-string(REGEX REPLACE "-gencode arch=compute_[0-9]+,code=sm_[0-9]+" "" 
-       CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
 
 message(STATUS "CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
 

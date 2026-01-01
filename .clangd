@@ -17,3 +17,9 @@ If:
 CompileFlags:
   Add:
     - "--cuda-gpu-arch=sm_80"
+---
+If:
+  PathMatch: .*csrc/flash_attn/src/.*.h
+CompileFlags:
+  Add:
+    - "--cuda-gpu-arch=sm_80"
