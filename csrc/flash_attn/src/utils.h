@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "cute/tensor.hpp"
+#include <cute/tensor.hpp>
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -265,13 +265,13 @@ __forceinline__ __device__ auto convert_type_relu(cute::Tensor<Engine, Layout> c
     static_assert(numel % 2 == 0);
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     // HACK: this requires tensor to be "contiguous"
-    Tensor tensor_float2 = recast<float2>(tensor);
-    Tensor out_uint32 = make_tensor<uint32_t>(tensor_float2.layout());
+    cute::Tensor tensor_float2 = recast<float2>(tensor);
+    cute::Tensor out_uint32 = make_tensor<uint32_t>(tensor_float2.layout());
     #pragma unroll
     for (int i = 0; i < cute::size(out_uint32); ++i) {
         out_uint32(i) = convert_relu2<To_type>(tensor_float2(i));
     }
-    Tensor out = make_tensor(make_rmem_ptr<To_type>(out_uint32.data()), tensor.layout());
+    cute::Tensor out = make_tensor(make_rmem_ptr<To_type>(out_uint32.data()), tensor.layout());
 #else
     cute::Tensor out = flash::convert_type<To_type>(tensor);
     flash::relu_(out);
