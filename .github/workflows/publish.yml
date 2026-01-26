@@ -8,7 +8,7 @@
 name: Build wheels and deploy
 
 on:
-  create:
+  push:
     tags:
       - v*
 
@@ -40,9 +40,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-          os: [ubuntu-20.04]
-          python-version: ['cp311', 'cp312']
-          cuda-version: ['12.8']
+          os: [ubuntu-latest]
+          python-version: ['cp311', 'cp312', 'cp313', 'cp314']
+          cuda-version: ['12.8', '12.9', '13.0']
 
     steps:
       - name: Checkout
