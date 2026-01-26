@@ -64,7 +64,9 @@ jobs:
         uses: pypa/cibuildwheel@v2.22.0
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-manylinux_x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL: bash scripts/install-cuda-linux.sh ${{ matrix.cuda-version }}
+          CIBW_ENVIRONMENT: PATH=/usr/local/cuda/bin:/opt/rh/gcc-toolset-13/root/usr/bin:$PATH CUDA_HOME=/usr/local/cuda
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Rename wheel with CUDA tag

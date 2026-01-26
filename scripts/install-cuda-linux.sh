@@ -11,8 +11,8 @@ dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda
 
 dnf -y install gcc-toolset-13
 dnf -y remove gcc-toolset-14-*
-echo ". /opt/rh/gcc-toolset-13/enable" > /etc/profile.d/gcc.sh
-chmod +x /etc/profile.d/gcc.sh
+# echo ". /opt/rh/gcc-toolset-13/enable" > /etc/profile.d/gcc.sh
+# chmod +x /etc/profile.d/gcc.sh
 
 # Create a fake package to stop cuda from stupidly installing gcc-8.5
 
