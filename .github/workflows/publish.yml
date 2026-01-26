@@ -1,7 +1,6 @@
 # This workflow will:
-# - Create a new Github release
 # - Build wheels for supported architectures
-# - Deploy the wheels to the Github release
+# - Create a new Github release and upload wheels
 # - Release the static code to PyPi
 # For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
 
@@ -11,122 +10,115 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g., v0.5.1)'
+        required: true
+        type: string
+
+# Ensure we can get the tag name consistently whether triggered by push or workflow_dispatch
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-
-  setup_release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get the tag version
-        id: extract_branch
-        run: echo ::set-output name=branch::${GITHUB_REF#refs/tags/}
-        shell: bash
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.extract_branch.outputs.branch }}
-          release_name: ${{ steps.extract_branch.outputs.branch }}
-
   build_wheels:
     name: Build Wheel
-    needs: setup_release
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
-          os: [ubuntu-latest]
-          python-version: ['cp311', 'cp312', 'cp313', 'cp314']
-          cuda-version: ['12.8', '12.9', '13.0']
+        os: [ubuntu-latest]
+        python-version: ['cp311', 'cp312', 'cp313', 'cp314']
+        cuda-version: ['12.8', '12.9', '13.0']
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          submodules: recursive
 
       - name: Set up python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Set CUDA and PyTorch versions
+      - name: Set CUDA major version
         run: |
           echo "MATRIX_CUDA_MAJOR=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
 
       - name: Free up disk space
-        if: ${{ runner.os == 'Linux' }}
-        # https://github.com/easimon/maximize-build-space/blob/master/action.yml
-        # https://github.com/easimon/maximize-build-space/tree/test-report
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
 
       - name: Set up swap space
-        if: runner.os == 'Linux'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 10
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.17.0
+        uses: pypa/cibuildwheel@v2.22.0
         env:
           CIBW_BUILD: ${{ matrix.python-version }}-manylinux_x86_64
           CIBW_BEFORE_ALL: bash scripts/install-cuda-linux.sh ${{ matrix.cuda-version }}
           CIBW_BUILD_VERBOSITY: 1
 
-      - name: Log Built Wheels
+      - name: Rename wheel with CUDA tag
         run: |
           python3 set_tag_in_wheels.py "+cu$MATRIX_CUDA_MAJOR" wheelhouse/*.whl
           ls wheelhouse
-          wheel_name=$(basename wheelhouse/*.whl)
-          echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
-
-      - name: Get the tag version
-        id: extract_branch
-        run: echo ::set-output name=branch::${GITHUB_REF#refs/tags/}
-
-      - name: Get Release with tag
-        id: get_current_release
-        uses: joutvhu/get-release@v1
-        with:
-          tag_name: ${{ steps.extract_branch.outputs.branch }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Asset
-        id: upload_release_asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_current_release.outputs.upload_url }}
-          asset_path: ./wheelhouse/${{env.wheel_name}}
-          asset_name: ${{env.wheel_name}}
-          asset_content_type: application/*
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{env.wheel_name}}
-          path: ./wheelhouse/${{env.wheel_name}}
+          name: wheel-${{ matrix.python-version }}-cu${{ env.MATRIX_CUDA_MAJOR }}
+          path: ./wheelhouse/*.whl
+
+  create_release:
+    name: Create Release
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: wheels/
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List wheels
+        run: ls -la wheels/
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          files: wheels/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish_package:
     name: Publish package
-    needs: [build_wheels]
-
+    needs: [create_release]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          submodules: recursive
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -142,10 +134,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist/
+          pattern: wheel-*
           merge-multiple: true
-          pattern: '*+cu12*.whl'
-        
-      - name: Remove version tag for pypi
+
+      - name: Remove CUDA tag for pypi
         run: |
           python3 set_tag_in_wheels.py "" dist/*+cu12*.whl
 
