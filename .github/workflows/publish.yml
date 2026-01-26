@@ -71,13 +71,13 @@ jobs:
 
       - name: Rename wheel with CUDA tag
         run: |
-          python3 set_tag_in_wheels.py "+cu$MATRIX_CUDA_MAJOR" wheelhouse/*.whl
+          python3 set_tag_in_wheels.py "+cu${{ matrix.cuda-version }}" wheelhouse/*.whl
           ls wheelhouse
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.python-version }}-cu${{ env.MATRIX_CUDA_MAJOR }}
+          name: wheel-${{ matrix.python-version }}-cu${{ matrix.cuda-version }}
           path: ./wheelhouse/*.whl
 
   create_release:
@@ -136,12 +136,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist/
-          pattern: wheel-*
+          pattern: wheel-*-cu12.8
           merge-multiple: true
 
       - name: Remove CUDA tag for pypi
         run: |
-          python3 set_tag_in_wheels.py "" dist/*+cu12*.whl
+          python3 set_tag_in_wheels.py "" dist/*+cu12.8*.whl
 
       - name: Publish release distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
