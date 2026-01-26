@@ -1,4 +1,5 @@
 import math
+import re
 from functools import partial, wraps
 from typing import List, Optional, Sequence
 
@@ -6,10 +7,9 @@ import einops
 import jax
 import jax._src.dispatch
 import jax.numpy as jnp
-from jax import Array
 import numpy as np
 from einops import rearrange
-from jax import core, dtypes
+from jax import Array, core, dtypes
 from jax.core import ShapedArray
 from jax.experimental.custom_partitioning import (
     ArrayMapping,
@@ -17,13 +17,15 @@ from jax.experimental.custom_partitioning import (
     SdyShardingRule,
     custom_partitioning,
 )
+
 from jax.extend.core import Primitive
 from jax.interpreters import batching, mlir, xla
+from jax.interpreters.mlir import ir
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from flash_attn_jax.ring_attention import ring_fwd
-from flash_attn_jax.util import num_splits_heuristic, round_multiple
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping
 
 # ==== Register primitives ====
 
@@ -60,7 +62,7 @@ def flash_mha_fwd(q, k, v, *,
 
 # ==== HLO lowering ====
 
-def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: bool, window_size_left: int, window_size_right: int):
     #         // This needs to match with run_mha_fwd_splitkv_dispatch
     # const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
     # const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
@@ -119,8 +121,12 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float, is_causal: bool, w
         o = o[:,:,:,:d]
     return o, lse
 
+
 def _flash_mha_fwd_lowering_mlir(ctx, q, k, v, **keywords):
-    return mlir.lower_fun(_flash_mha_fwd_lowering, multiple_results=True)(ctx, q, k, v, **keywords)
+    return mlir.lower_fun(
+        partial(_flash_mha_fwd_lowering_sharded, **keywords), multiple_results=True
+    )(ctx, q, k, v)
+
 
 mlir.register_lowering(
     _flash_mha_fwd_p,
@@ -170,3 +176,91 @@ def mha_fwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
   else:
     raise NotImplementedError("MHA fwd only support vmapping over q or (q,k,v) for now, got batch axes " + str(batch_axes))
 batching.primitive_batchers[_flash_mha_fwd_p] = mha_fwd_batch
+
+# ==== Sharding ====
+@partial(custom_partitioning, static_argnums=(3, 4, 5, 6))
+def _flash_mha_fwd_lowering_sharded(
+    q,
+    k,
+    v,
+    softmax_scale: Optional[float],
+    is_causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+):
+    return _flash_mha_fwd_lowering(
+        q,
+        k,
+        v,
+        softmax_scale=softmax_scale,
+        is_causal=is_causal,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
+    )
+
+
+def is_replicated(sharding):
+    if isinstance(sharding, NamedSharding):
+        return sharding.is_fully_replicated
+    raise ValueError(f"Unsupported sharding type: {type(sharding)}")
+
+def partition_fwd(softmax_scale, is_causal, window_size_left, window_size_right,
+                  mesh: Mesh,
+                  arg_shapes: List[jax.ShapeDtypeStruct],
+                  result_shape: List[jax.ShapeDtypeStruct]):
+    result_shardings = tuple([x.sharding for x in result_shape])
+    arg_shardings = tuple([x.sharding for x in arg_shapes])
+
+    q_sharding = arg_shardings[0]
+    k_sharding = arg_shardings[1]
+    v_sharding = arg_shardings[2]
+    assert q_sharding == k_sharding and q_sharding == v_sharding, "Only support q, k, v sharing the same sharding."
+    if is_replicated(q_sharding):
+        result_shardings = (NamedSharding(mesh, P()), NamedSharding(mesh, P()))
+    elif isinstance(q_sharding, NamedSharding):
+        [n,s,h,d] = q_sharding.spec
+        assert d is None, "Sharding across `d` won't be efficient, so it's not supported."
+        assert s is None, "No ring attention yet"
+        result_shardings = q_sharding, NamedSharding(mesh, P(n,h,s))
+        arg_shardings = q_sharding, q_sharding, q_sharding
+    def fwd(q,k,v):
+        return _flash_mha_fwd_lowering(q,k,v, softmax_scale=softmax_scale, is_causal=is_causal, window_size_left=window_size_left, window_size_right=window_size_right)
+    return mesh, fwd, result_shardings, arg_shardings
+
+def sharding_rule_fwd(
+    softmax_scale: Optional[float],
+    is_causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    mesh: Mesh,
+    arg_shapes: List[ir.RankedTensorType],
+    result_shape: List[ir.RankedTensorType],
+):
+    q_shape, k_shape, v_shape = arg_shapes
+    group_size = q_shape.shape[-2] // k_shape.shape[-2]
+    if group_size > 1:
+        return SdyShardingRule(
+            operand_mappings=(
+                array_mapping("N S (H G) D"),
+                array_mapping("N T H D"),
+                array_mapping("N T H D"),
+            ),
+            result_mappings=(array_mapping("N S (H G) D"), array_mapping("N (H G) S")),
+            G=group_size,
+        )
+    else:
+        return SdyShardingRule(
+            operand_mappings=(
+                array_mapping("N S H D"),
+                array_mapping("N T H D"),
+                array_mapping("N T H D"),
+            ),
+            result_mappings=(array_mapping("N S H D"), array_mapping("N H S")),
+        )
+
+_flash_mha_fwd_lowering_sharded.def_partition(
+    infer_sharding_from_operands=None,
+    propagate_user_sharding=None,
+    partition=partition_fwd,
+    sharding_rule = sharding_rule_fwd,
+    )

@@ -1,22 +1,31 @@
 from functools import partial, wraps
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import Array, core, dtypes
 from jax.core import ShapedArray
+from jax.experimental.custom_partitioning import (
+    ArrayMapping,
+    CompoundFactor,
+    SdyShardingRule,
+    custom_partitioning,
+)
 from jax.interpreters import batching
 from jax.interpreters import mlir
+from jax.interpreters.mlir import ir
 from jax.interpreters import xla
 from jax.extend.core import Primitive
+from jax.sharding import Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 import jax._src.dispatch
 
 from einops import rearrange
 import einops
 import math
 
-from flash_attn_jax.util import round_multiple
+from flash_attn_jax.util import round_multiple, array_mapping
 
 # ==== Register primitives ====
 
@@ -41,7 +50,7 @@ def flash_mha_bwd(dout, q, k, v, o, lse, *,
 
 # ==== HLO lowering ====
 
-def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
+def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: Optional[float], is_causal: bool, window_size_left: int, window_size_right: int):
     [n, lq, hq, d] = q.shape
     [_, lk, hk, _] = k.shape
     dtype = q.dtype
@@ -105,7 +114,9 @@ def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: float, is
     return dq, dk, dv
 
 def _flash_mha_bwd_lowering_mlir(ctx, dout, q, k, v, out, lse, **keywords):
-    return mlir.lower_fun(_flash_mha_bwd_lowering, multiple_results=True)(ctx, dout, q, k, v, out, lse, **keywords)
+    return mlir.lower_fun(
+        partial(_flash_mha_bwd_lowering_sharded, **keywords), multiple_results=True
+    )(ctx, dout, q, k, v, out, lse)
 
 mlir.register_lowering(
     _flash_mha_bwd_p,
@@ -158,3 +169,149 @@ def mha_bwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
         raise NotImplementedError("MHA bwd only support vmapping over q or (q,k,v) for now, got batch axes " + str(batch_axes))
 
 batching.primitive_batchers[_flash_mha_bwd_p] = mha_bwd_batch
+
+# ==== Sharding ====
+
+@partial(custom_partitioning, static_argnums=(6, 7, 8, 9))
+def _flash_mha_bwd_lowering_sharded(
+    dout,
+    q,
+    k,
+    v,
+    out,
+    lse,
+    softmax_scale: Optional[float],
+    is_causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+):
+    return _flash_mha_bwd_lowering(
+        dout,
+        q,
+        k,
+        v,
+        out,
+        lse,
+        softmax_scale=softmax_scale,
+        is_causal=is_causal,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
+    )
+
+
+def is_replicated(sharding):
+    if isinstance(sharding, NamedSharding):
+        return sharding.is_fully_replicated
+    raise ValueError(f"Unsupported sharding type: {type(sharding)}")
+
+
+def partition_bwd(softmax_scale, is_causal, window_size_left, window_size_right,
+                  mesh: Mesh,
+                  arg_shapes: List[jax.ShapeDtypeStruct],
+                  result_shape: List[jax.ShapeDtypeStruct]):
+    result_shardings = tuple([x.sharding for x in result_shape])
+    arg_shardings = tuple([x.sharding for x in arg_shapes])
+
+    # arg_shardings: dout, q, k, v, out, lse
+    dout_sharding = arg_shardings[0]
+    q_sharding = arg_shardings[1]
+    k_sharding = arg_shardings[2]
+    v_sharding = arg_shardings[3]
+    out_sharding = arg_shardings[4]
+    lse_sharding = arg_shardings[5]
+
+    # For simplicity, require all q-shaped tensors to have the same sharding
+    assert dout_sharding == q_sharding == out_sharding, "dout, q, out must share the same sharding."
+    assert k_sharding == v_sharding, "k, v must share the same sharding."
+
+    if is_replicated(q_sharding):
+        result_shardings = (
+            NamedSharding(mesh, P()),  # dq
+            NamedSharding(mesh, P()),  # dk
+            NamedSharding(mesh, P()),  # dv
+        )
+    elif isinstance(q_sharding, NamedSharding):
+        [n, s, h, d] = q_sharding.spec
+        assert d is None, "Sharding across `d` won't be efficient, so it's not supported."
+        assert s is None, "No ring attention yet"
+        # dq has same shape as q: [n, sq, hq, d]
+        # dk, dv have same shape as k, v: [n, sk, hk, d]
+        # For GQA, hq > hk, and the sharding on h dimension needs adjustment
+        [nk, sk, hk, dk] = k_sharding.spec
+        result_shardings = (
+            q_sharding,  # dq: [n, sq, hq, d]
+            k_sharding,  # dk: [n, sk, hk, d]
+            k_sharding,  # dv: [n, sk, hk, d]
+        )
+        # lse has shape [n, hq, sq], sharding should be P(n, h, s)
+        lse_sharding = NamedSharding(mesh, P(n, h, s))
+        arg_shardings = (q_sharding, q_sharding, k_sharding, k_sharding, q_sharding, lse_sharding)
+
+    def bwd(dout, q, k, v, out, lse):
+        return _flash_mha_bwd_lowering(
+            dout, q, k, v, out, lse,
+            softmax_scale=softmax_scale,
+            is_causal=is_causal,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
+        )
+
+    return mesh, bwd, result_shardings, arg_shardings
+
+
+def sharding_rule_bwd(
+    softmax_scale: Optional[float],
+    is_causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    mesh: Mesh,
+    arg_shapes: List[ir.RankedTensorType],
+    result_shape: List[ir.RankedTensorType],
+):
+    # arg_shapes: dout, q, k, v, out, lse
+    # dout/q/out: [n, sq, hq, d], k/v: [n, sk, hk, d], lse: [n, hq, sq]
+    # result_shapes: dq: [n, sq, hq, d], dk/dv: [n, sk, hk, d]
+    q_shape = arg_shapes[1]
+    k_shape = arg_shapes[2]
+    group_size = q_shape.shape[-2] // k_shape.shape[-2]
+    if group_size > 1:
+        return SdyShardingRule(
+            operand_mappings=(
+                array_mapping("N S (H G) D"),   # dout
+                array_mapping("N S (H G) D"),   # q
+                array_mapping("N T H D"),       # k
+                array_mapping("N T H D"),       # v
+                array_mapping("N S (H G) D"),   # out
+                array_mapping("N (H G) S"),     # lse
+            ),
+            result_mappings=(
+                array_mapping("N S (H G) D"),   # dq
+                array_mapping("N T H D"),       # dk
+                array_mapping("N T H D"),       # dv
+            ),
+            G=group_size,
+        )
+    else:
+        return SdyShardingRule(
+            operand_mappings=(
+                array_mapping("N S H D"),   # dout
+                array_mapping("N S H D"),   # q
+                array_mapping("N T H D"),   # k
+                array_mapping("N T H D"),   # v
+                array_mapping("N S H D"),   # out
+                array_mapping("N H S"),     # lse
+            ),
+            result_mappings=(
+                array_mapping("N S H D"),   # dq
+                array_mapping("N T H D"),   # dk
+                array_mapping("N T H D"),   # dv
+            ),
+        )
+
+
+_flash_mha_bwd_lowering_sharded.def_partition(
+    infer_sharding_from_operands=None,
+    propagate_user_sharding=None,
+    partition=partition_bwd,
+    sharding_rule=sharding_rule_bwd,
+)

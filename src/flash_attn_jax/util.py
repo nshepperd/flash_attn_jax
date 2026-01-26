@@ -1,4 +1,9 @@
 import math
+from jax.experimental.custom_partitioning import (
+    ArrayMapping,
+    CompoundFactor,
+)
+import re
 
 def ceildiv(a: int, b: int) -> int:
     return (a + b - 1) // b
@@ -25,3 +30,17 @@ def num_splits_heuristic(batch_nheads_mblocks: int, num_SMs: int, num_n_blocks: 
 # auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
 def round_multiple(x: int, m: int) -> int:
     return (x + m - 1) // m * m
+
+def array_mapping(spec: str) -> ArrayMapping:
+    """Parse a spec string like 'n l (h g) d' into an ArrayMapping.
+
+    - Simple dimensions: single letters/words become string factors
+    - Compound factors: parenthesized groups like (h g) become CompoundFactor
+    """
+    factors = []
+    for token in re.findall(r'\([^)]+\)|\S+', spec):
+        if token.startswith('('):
+            factors.append(CompoundFactor(*token[1:-1].split()))
+        else:
+            factors.append(token)
+    return ArrayMapping(*factors)
