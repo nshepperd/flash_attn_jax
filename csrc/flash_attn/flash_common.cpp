@@ -9,6 +9,7 @@
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+using namespace flash;
 
 ffi::Error set_params_fprop(Flash_fwd_params &params,
 					  ffi::DataType element_type,
@@ -78,6 +79,8 @@ ffi::Error set_params_fprop(Flash_fwd_params &params,
     params.cu_seqlens_q = static_cast<int *>(cu_seqlens_q_d);
     params.cu_seqlens_k = static_cast<int *>(cu_seqlens_k_d);
     params.seqused_k = static_cast<int *>(seqused_k);
+    params.leftpad_k = nullptr; // TODO: implement left padding
+    params.seqlenq_ngroups_swapped = seqlenq_ngroups_swapped;
 
     // P = softmax(QK^T)
     params.p_ptr = p_d;
@@ -111,6 +114,8 @@ ffi::Error set_params_fprop(Flash_fwd_params &params,
     params.rp_dropout = 1.f / params.p_dropout;
     params.scale_softmax_rp_dropout = params.rp_dropout * params.scale_softmax;
     FFI_CHECK(p_dropout < 1.f) << "dropout must be <1";
+
+    params.softcap = 0.0f; // TODO: implement softcap, maybe later...
 
     // Causal is the special case where window_size_right == 0 and window_size_left < 0.
     // Local is the more general case where window_size_right >= 0 or window_size_left >= 0.

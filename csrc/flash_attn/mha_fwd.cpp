@@ -3,28 +3,31 @@
  ******************************************************************************/
 
 #include <cstdint>
-#include <stddef.h>
-#include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
+#include <cutlass/numeric_types.h>
+#include <stddef.h>
 
-#include "flash.h"
-#include "static_switch.h"
 #include "check.h"
+#include "flash.h"
 #include "flash_common.h"
 #include "mha_fwd.h"
+#include "static_switch.h"
 #include "xla/ffi/api/api.h"
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+using namespace flash;
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
     FP16_SWITCH(!params.is_bf16, [&] {
         HEADDIM_SWITCH(params.d, [&] {
-            if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
-                run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-            } else {
-                run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim>(params, stream);
-            }
+            BOOL_SWITCH(params.is_causal, Is_causal, [&] {
+                if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
+                    run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
+                } else {
+                    run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim, Is_causal>(params, stream);
+                }
+            });
         });
     });
 }
@@ -119,6 +122,9 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
                      softmax_scale,
                      window_size_left,
                      window_size_right));
+    params.unpadded_lse = false;
+    params.total_q = 0;
+    
 
 
 	int sm_count;
@@ -314,7 +320,9 @@ mha_varlen_fwd_impl(
                      window_size_left,
                      window_size_right,
                      seqlenq_ngroups_swapped);
-    
+    params.unpadded_lse = false;
+    params.total_q = total_q;
+
     int max_splits = oaccum->dimensions()[0];
     if (seqlenq_ngroups_swapped) {
         // Only apply split-k for decoding
