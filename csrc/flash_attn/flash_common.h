@@ -10,7 +10,7 @@
 
 namespace ffi = xla::ffi;
 
-ffi::Error set_params_fprop(Flash_fwd_params &params, ffi::DataType element_type,
+ffi::Error set_params_fprop(flash::Flash_fwd_params &params, ffi::DataType element_type,
                             // sizes
                             const size_t b, const size_t seqlen_q, const size_t seqlen_k,
                             const size_t seqlen_q_rounded, const size_t seqlen_k_rounded,
@@ -23,7 +23,7 @@ ffi::Error set_params_fprop(Flash_fwd_params &params, ffi::DataType element_type
                             int window_size_left, int window_size_right,
                             bool seqlenq_ngroups_swapped = false);
 
-ffi::Error set_params_splitkv(Flash_fwd_params &params,
+ffi::Error set_params_splitkv(flash::Flash_fwd_params &params,
                               const int batch_size, const int num_heads, const int head_size,
                               const int max_seqlen_k, const int max_seqlen_q,
                               const int head_size_rounded, const float p_dropout,

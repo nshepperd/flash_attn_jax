@@ -1,19 +1,19 @@
-#include <driver_types.h>
-#include <stddef.h>
-#include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
 #include <cute/layout.hpp>
+#include <cutlass/numeric_types.h>
+#include <driver_types.h>
+#include <stddef.h>
 
+#include "check.h"
 #include "flash.h"
 #include "static_switch.h"
-#include "check.h"
 
 #include "flash_common.h"
 #include "mha_bwd.h"
-#include "flash_common.h"
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+using namespace flash;
 
 ffi::Error set_params_dgrad(Flash_bwd_params &params,
 					  ffi::DataType element_type,
@@ -103,7 +103,9 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
 void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
     FP16_SWITCH(!params.is_bf16, [&] {
         HEADDIM_SWITCH(params.d, [&] {
-            run_mha_bwd_<elem_type, kHeadDim>(params, stream);
+            BOOL_SWITCH(params.is_causal, Is_causal, [&] {
+                flash::run_mha_bwd_<elem_type, kHeadDim, Is_causal>(params, stream);
+            });
         });
     });
 }
@@ -218,6 +220,8 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                      window_size_left,
                      window_size_right,
                      deterministic));
+    params.unpadded_lse = false;
+    params.total_q = 0;
     params.dq_accum_split_stride = !deterministic ? 0 : (batch_size * seqlen_q_rounded * num_heads * head_size_rounded);
 
     auto launch = &run_mha_bwd;
@@ -394,6 +398,8 @@ mha_varlen_bwd_impl(
                      window_size_left,
                      window_size_right,
                      deterministic));
+    params.unpadded_lse = false;
+    params.total_q = total_q;
     params.dq_accum_split_stride = dq_accum_split_stride;
 
     auto launch = &run_mha_bwd;
