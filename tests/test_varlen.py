@@ -38,7 +38,7 @@ def check(ref_out, jax_out, out, margin=4):
     tree_map(check1, ref_out, jax_out, out)
 
 
-def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *, is_causal=False, window_size=(-1,-1), **kwargs):
+def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, *, is_causal=False, window_size=(-1,-1), **kwargs):
     [sq, hq, cq] = q.shape
     [sk, hk, ck] = k.shape
     assert k.shape == v.shape
@@ -47,7 +47,7 @@ def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *, is_causal=F
         assert hq > hk and hq % hk == 0
         m = hq // hk
         q = einops.rearrange(q, 'sq (h m) c -> m sq h c', m=m)
-        out = jax.vmap(lambda q_: ref_mha_varlen(q_, k, v, seqlens_q, seqlens_k, seqused_k, is_causal=is_causal, window_size=window_size, **kwargs), in_axes=0)(q)
+        out = jax.vmap(lambda q_: ref_mha_varlen(q_, k, v, seqlens_q, seqlens_k, is_causal=is_causal, window_size=window_size, **kwargs), in_axes=0)(q)
         out = einops.rearrange(out, 'm sq h c -> sq (h m) c')
         return out
     [b_plus_1] = seqlens_q.shape
@@ -55,8 +55,6 @@ def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *, is_causal=F
     coord_k = jnp.broadcast_to(jnp.arange(sk), (sq, sk))
     q_starts, q_ends = seqlens_q[:-1], seqlens_q[1:]
     k_starts, k_ends = seqlens_k[:-1], seqlens_k[1:]
-    if seqused_k is not None:
-        k_ends = jnp.minimum(k_ends, k_starts + seqused_k)
     mask_q = jax.vmap(
         lambda q_start, q_end, k_start, k_end: (
             (coord_q >= q_start)
@@ -79,21 +77,17 @@ def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *, is_causal=F
     out = jnp.einsum('hqk,khd->qhd', attn, v.astype(jnp.float32))
     return out.astype(q.dtype)
 
-@pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
+def test_varlen_flash_fwd(m, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
     total_seqlen = sum(lens)
-
-    if seqused_k_limit is not None and (causal or local):
-        return # skip causal/local tests with seqused_k_limit
 
     fenceposts = jnp.cumsum(jnp.array([0] + lens), dtype=jnp.int32)
 
@@ -101,24 +95,10 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
     k = jax.random.normal(jax.random.PRNGKey(1), [total_seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [total_seqlen, h, d], dtype=jnp.float32)
 
-    seqused_k = None
-    if seqused_k_limit is not None:
-        seqused_k = jnp.array([min(l, seqused_k_limit) for l in lens])
-
     def ref(q,k,v):
-        out = ref_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
-                           seqused_k=seqused_k,
+        out = ref_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
-        # out = jnp.zeros([total_seqlen, h*m, d], dtype=jnp.float32)
-        # for i in range(b):
-        #     bq = q[None,fenceposts[i]:fenceposts[i+1]]
-        #     bk = k[None,fenceposts[i]:fenceposts[i+1]]
-        #     bv = v[None,fenceposts[i]:fenceposts[i+1]]
-        #     if seqused_k_limit is not None:
-        #         bk = bk[:, :seqused_k_limit, :]
-        #         bv = bv[:, :seqused_k_limit, :]
-        #     out = out.at[None,fenceposts[i]:fenceposts[i+1]].set(ref_mha(bq, bk, bv, is_causal=bool(causal), window_size=window_size))
         return out
 
     ref_out = ref(q,k,v)
@@ -127,61 +107,42 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype, seqused_k_limit):
     v = v.astype(dtype)
     jax_out = ref(q,k,v)
 
-    out = flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
-                           seqused_k=seqused_k,
+    out = flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
     check(ref_out, jax_out, out)
     
 
-@pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_bwd(m, h, d, causal, local, dtype, seqused_k_limit):
+def test_varlen_flash_bwd(m, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
     total_seqlen = sum(lens)
-    if seqused_k_limit is not None and (causal or local):
-        return # skip causal/local tests with seqused_k_limit
     fenceposts = jnp.cumsum(jnp.array([0] + lens), dtype=jnp.int32)
     q = jax.random.normal(jax.random.PRNGKey(0), [total_seqlen, h*m, d], dtype=jnp.float32)
     k = jax.random.normal(jax.random.PRNGKey(1), [total_seqlen, h, d], dtype=jnp.float32)
     v = jax.random.normal(jax.random.PRNGKey(2), [total_seqlen, h, d], dtype=jnp.float32)
 
-    seqused_k = None
-    if seqused_k_limit is not None:
-        seqused_k = jnp.array([min(l, seqused_k_limit) for l in lens])
-    
     def ref(qkv, dtype=jnp.float32):
         q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
-        o = ref_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts, seqused_k=seqused_k,
+        o = ref_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                             max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
         return o.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
-        # q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
-        # out = jnp.zeros([total_seqlen, h*m, d], dtype=dtype)
-        # for i in range(b):
-        #     bq = q[None,fenceposts[i]:fenceposts[i+1]]
-        #     bk = k[None,fenceposts[i]:fenceposts[i+1]]
-        #     bv = v[None,fenceposts[i]:fenceposts[i+1]]
-        #     if seqused_k_limit is not None:
-        #         bk = bk[:, :seqused_k_limit, :]
-        #         bv = bv[:, :seqused_k_limit, :]
-        #     out = out.at[None,fenceposts[i]:fenceposts[i+1]].set(ref_mha(bq, bk, bv, is_causal=bool(causal), window_size=window_size))
-        # return out.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
-    
+
     def fwd(qkv, dtype):
         q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
-        o = flash_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts, seqused_k=seqused_k,
+        o = flash_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                             max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
         return o.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
-    
+
     ref_grad = jax.grad(ref)((q,k,v), dtype=jnp.float32)
     ref_grad_dtype = jax.grad(ref)((q,k,v), dtype=dtype)
     mha_grad = jax.grad(fwd)((q,k,v), dtype=dtype)
@@ -196,59 +157,41 @@ def vmap_unrolled(f):
     return wrapped
 
 
-@pytest.mark.parametrize("seqused_k_limit", [None, 4])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_vmap(m, h, d, causal, local, dtype, seqused_k_limit):
+def test_varlen_flash_vmap(m, h, d, causal, local, dtype):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
     total_seqlen = sum(lens)
-
-    if (causal or local) and seqused_k_limit is not None:
-        pytest.skip()
 
     N = 4
     fenceposts = jnp.broadcast_to(jnp.cumsum(jnp.array([0] + lens), dtype=jnp.int32), (N, b+1))
     q = jax.random.normal(jax.random.PRNGKey(0), [N, total_seqlen, h*m, d], dtype=dtype)
     k = jax.random.normal(jax.random.PRNGKey(1), [N, total_seqlen, h, d], dtype=dtype)
     v = jax.random.normal(jax.random.PRNGKey(2), [N, total_seqlen, h, d], dtype=dtype)
-    seqused_k = None
-    if seqused_k_limit is not None:
-        seqused_k = jnp.array([min(l, seqused_k_limit) for l in lens])
-        seqused_k = jnp.broadcast_to(seqused_k, (N, b))
-    def fwd_fn(q,k,v,fenceposts,seqused_k=None):
-        return flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
-                           seqused_k=seqused_k,
+    def fwd_fn(q,k,v,fenceposts):
+        return flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
-    def ref_fn(q,k,v,fenceposts,seqused_k=None):
-        return ref_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts, 
-                           seqused_k=seqused_k,
+    def ref_fn(q,k,v,fenceposts):
+        return ref_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
                             is_causal=bool(causal), window_size=window_size)
-    
-    # if seqused_k is not None:
-    #     out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts, seqused_k)
-    # else:
-    #     out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts)
-    atol = 8e-3 if dtype == jnp.float16 else 4e-2
-    rtol = 8e-3 if dtype == jnp.float16 else 3e-2
-    out_ref = jax.vmap(ref_fn)(q,k,v,fenceposts, seqused_k)
-    out_vmap = jax.vmap(fwd_fn)(q,k,v,fenceposts, seqused_k)
+
+    atol = 5e-3 if dtype == jnp.float16 else 4e-2
+    rtol = 3e-3 if dtype == jnp.float16 else 3e-2
+    out_ref = jax.vmap(ref_fn)(q,k,v,fenceposts)
+    out_vmap = jax.vmap(fwd_fn)(q,k,v,fenceposts)
     np.testing.assert_allclose(out_vmap, out_ref, atol=atol, rtol=rtol)
 
-    # if seqused_k is not None:
-    #     grad_ref = jax.grad(lambda q,k,v: jnp.square(vmap_unrolled(fwd_fn)(q,k,v,fenceposts, seqused_k)).sum())(q,k,v)
-    # else:
-    #     grad_ref = jax.grad(lambda q,k,v: jnp.square(vmap_unrolled(fwd_fn)(q,k,v,fenceposts)).sum())(q,k,v)
-    grad_ref = jax.grad(lambda qkv: jnp.square(jax.vmap(ref_fn)(*qkv,fenceposts, seqused_k)).sum())((q,k,v))
-    grad_vmap = jax.grad(lambda qkv: jnp.square(jax.vmap(fwd_fn)(*qkv,fenceposts, seqused_k)).sum())((q,k,v))
-    
+    grad_ref = jax.grad(lambda qkv: jnp.square(jax.vmap(ref_fn)(*qkv,fenceposts)).sum())((q,k,v))
+    grad_vmap = jax.grad(lambda qkv: jnp.square(jax.vmap(fwd_fn)(*qkv,fenceposts)).sum())((q,k,v))
+
     np.testing.assert_allclose(grad_vmap[0], grad_ref[0], atol=atol, rtol=rtol)
     np.testing.assert_allclose(grad_vmap[1], grad_ref[1], atol=atol, rtol=rtol)
     np.testing.assert_allclose(grad_vmap[2], grad_ref[2], atol=atol, rtol=rtol)
@@ -298,12 +241,11 @@ def test_varlen_flash_vmapk(h, d, causal, local, dtype):
     np.testing.assert_allclose(grad_vmap[2], grad_ref[2], atol=atol, rtol=rtol)
 
 if __name__ == '__main__':
-    print(flash_mha_varlen(jnp.zeros([4,1,64],dtype=jnp.float16), 
-                                jnp.zeros([4,1,64],dtype=jnp.float16), 
+    print(flash_mha_varlen(jnp.zeros([4,1,64],dtype=jnp.float16),
+                                jnp.zeros([4,1,64],dtype=jnp.float16),
                                 jnp.zeros([4,1,64],dtype=jnp.float16),
                                 jnp.array([0,2,4]),
                                 jnp.array([0,2,4]),
-                                seqused_k=None,
                                 max_seqlen_q=4,
                                 max_seqlen_k=4,
                                 softmax_scale=0.5,

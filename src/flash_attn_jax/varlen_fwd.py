@@ -28,7 +28,7 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_fw
 
 # ==== Frontend ====
 
-def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
+def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k,
                          *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
@@ -38,25 +38,20 @@ def flash_mha_varlen_fwd(q, k, v, seqlens_q, seqlens_k, seqused_k=None,
     if max_seqlen_k == -1:
         max_seqlen_k = k.shape[0]
     assert seqlens_q.shape == seqlens_k.shape, "seqlens_q and seqlens_k must have the same shape."
-    has_seqused_k = seqused_k is not None
     kwargs = dict(
         max_seqlen_q=max_seqlen_q,
         max_seqlen_k=max_seqlen_k,
-        has_seqused_k=has_seqused_k,
         softmax_scale=softmax_scale,
         is_causal=is_causal,
         window_size_left=window_size_left,
         window_size_right=window_size_right,
     )
-    if seqused_k is not None:
-        return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, seqused_k, **kwargs))
-    else:
-        return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, **kwargs))
+    return tuple(_flash_mha_varlen_fwd_p.bind(q, k, v, seqlens_q, seqlens_k, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=None, *,
-                                       max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool,
+def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, *,
+                                       max_seqlen_q: int, max_seqlen_k: int,
                                        softmax_scale: float, is_causal: bool, window_size_left: int, window_size_right: int):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
@@ -99,12 +94,12 @@ def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=No
 
 
     out, lse = jax.ffi.ffi_call(
-        "flash_mha_varlen_fwd", 
+        "flash_mha_varlen_fwd",
         result_shape_dtypes=out_types,
         has_side_effect=False,
-        input_layouts=[None]*(5 + (seqused_k is not None)), # default row major
+        input_layouts=[None]*5, # default row major
         output_layouts=[None]*4,
-        )(q, k, v, seqlens_q, seqlens_k, *[seqused_k] if seqused_k is not None else [],
+        )(q, k, v, seqlens_q, seqlens_k,
         max_seqlen_q=mlir.i32_attr(max_seqlen_q),
         max_seqlen_k=mlir.i32_attr(max_seqlen_k),
         softmax_scale=softmax_scale,
@@ -129,8 +124,8 @@ mlir.register_lowering(
 
 # ==== Abstract Evaluation ====
 
-def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, seqused_k=None, *,
-                                   max_seqlen_q, max_seqlen_k, has_seqused_k, 
+def _flash_mha_varlen_fwd_abstract(q, k, v, seqlens_q, seqlens_k, *,
+                                   max_seqlen_q, max_seqlen_k,
                                    softmax_scale=None, is_causal=None, window_size_left=None, window_size_right=None):
     q_dtype = dtypes.canonicalize_dtype(q.dtype)
     k_dtype = dtypes.canonicalize_dtype(k.dtype)
@@ -152,33 +147,24 @@ _flash_mha_varlen_fwd_p.def_abstract_eval(_flash_mha_varlen_fwd_abstract)
 
 # ==== VMap rules ====
 
-def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: int, max_seqlen_k: int, has_seqused_k: bool, **kwargs):
+def _flash_mha_varlen_fwd_batch(vector_arg_values, batch_axes, *, max_seqlen_q: int, max_seqlen_k: int, **kwargs):
     # move mapping axes to the front
     vector_arg_values, batch_axes = zip(*[(jnp.moveaxis(x, b, 0), 0) if b is not None else (x, b) for x, b in zip(vector_arg_values, batch_axes)])
-    q, k, v, seqlens_q, seqlens_k, *rest = vector_arg_values
-    if has_seqused_k:
-        seqused_k, = rest
+    q, k, v, seqlens_q, seqlens_k = vector_arg_values
     assert all(isinstance(b, int) or b is None for b in batch_axes)
-    assert isinstance(has_seqused_k, bool)
-    if batch_axes in ((0,0,0,0,0),(0,0,0,0,0,0)):
+    if batch_axes == (0,0,0,0,0):
         b, sq, hq, dq = q.shape
         b, sk, hk, dk = k.shape
         assert dq == dk
         assert k.shape == v.shape
         assert seqlens_q.shape == seqlens_k.shape
         b, n_plus_1 = seqlens_q.shape
-        n = n_plus_1 - 1
         new_q = q.reshape((b*sq, hq, dq))
         new_k = k.reshape((b*sk, hk, dk))
         new_v = v.reshape((b*sk, hk, dk))
         new_seqlens_q = (seqlens_q + (jnp.arange(b)[:,None]*sq)).reshape((b*n_plus_1,))
         new_seqlens_k = (seqlens_k + (jnp.arange(b)[:,None]*sk)).reshape((b*n_plus_1,))
-        if has_seqused_k:
-            assert seqused_k.shape == (b, n)
-            new_seqused_k = jnp.pad(seqused_k, ((0,0),(0,1))).reshape((b*n_plus_1,))[:-1]
-        else:
-            new_seqused_k = None
-        out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, new_seqlens_q, new_seqlens_k, new_seqused_k,
+        out, lse = flash_mha_varlen_fwd(new_q, new_k, new_v, new_seqlens_q, new_seqlens_k,
                                         max_seqlen_q=max_seqlen_q, max_seqlen_k=max_seqlen_k, **kwargs)
         # out: (b*sq) hq dq
         # lse: (b*n_plus_1-1) hq max_seqlen_q
