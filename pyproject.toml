@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "scikit-build-core>=0.8.0",
+    "setuptools-scm>=8.0",
     "packaging",
     "psutil",
     "nanobind>=2.0.0",
@@ -57,6 +58,11 @@ cmake.build-type = "Release"
 cmake.args = []
 wheel.packages = ["src/flash_attn_jax"]
 wheel.install-dir = "flash_attn_jax"
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+sdist.include = ["flash_attn_jax/_version.py"]
+
+[tool.setuptools_scm]
+write_to = "src/flash_attn_jax/_version.py"
 
 [tool.scikit-build.cmake.define]
 SKBUILD = "ON"
@@ -67,9 +73,10 @@ FLASH_ATTENTION_TRITON_AMD_ENABLE = { env = "FLASH_ATTENTION_TRITON_AMD_ENABLE" 
 FLASH_ATTN_CUDA_ARCHS = { env = "FLASH_ATTN_CUDA_ARCHS" }
 CMAKE_VERBOSE_MAKEFILE = "ON"
 
-[tool.scikit-build.metadata.version]
-provider = "scikit_build_core.metadata.regex"
-input = "src/flash_attn_jax/__init__.py"
+# [tool.scikit-build.metadata.version]
+# provider = "scikit_build_core.metadata.regex"
+# input = "src/flash_attn_jax/__init__.py"
+
 
 [tool.cibuildwheel]
 archs = ["x86_64"]

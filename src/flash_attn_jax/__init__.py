@@ -1,4 +1,3 @@
-__version__ = 'v0.6.0'
 from .flash_hlo import register_custom_calls
 from .flash import flash_mha
 from .varlen import flash_mha_varlen

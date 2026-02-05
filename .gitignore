@@ -35,3 +35,6 @@ env
 tup.config
 local
 compile_commands.json
+
+# setuptools-scm
+src/flash_attn_jax/_version.py
