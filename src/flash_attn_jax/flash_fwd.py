@@ -89,6 +89,10 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: 
     lseaccum_shape = (num_splits, n, hq, lq)
     oaccum_shape = (num_splits, n, lq, hq, round_multiple(d, 32))
 
+    if os.environ.get("FLASH_ATTN_JAX_DEBUG", '0') == '1':
+        print(f"[flash_attn_jax] fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} d={d} dtype={dtype} "
+              f"block_n={block_n} num_n_blocks={num_n_blocks} num_m_blocks={num_m_blocks} sm_count={sm_count} num_splits={num_splits}")
+
     dpad = (8 - d%8) % 8
     if dpad > 0:
         # We need padding. It's better to let xla's allocator handle it here than directly call cudaMalloc.

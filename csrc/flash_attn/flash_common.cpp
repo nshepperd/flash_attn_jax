@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <cstdlib>
 #include <cutlass/numeric_types.h>
 #include <cute/layout.hpp>
 #include <cuda_runtime_api.h>
@@ -7,6 +8,15 @@
 #include "check.h"
 #include "flash_common.h"
 #include "xla/ffi/api/ffi.h"
+
+bool flash_debug() {
+    static int val = -1;
+    if (val < 0) {
+        const char* env = std::getenv("FLASH_ATTN_JAX_DEBUG");
+        val = (env && env[0] == '1') ? 1 : 0;
+    }
+    return val;
+}
 
 namespace ffi = xla::ffi;
 using namespace flash;
@@ -190,7 +200,14 @@ ffi::Error set_params_splitkv(Flash_fwd_params& params, const int batch_size,
     params.oaccum_ptr = nullptr;
     if (p_dropout == 0.0f) {  // SplitKV is not implemented for dropout
         if (num_splits < 1) {
-            params.num_splits = num_splits_heuristic(batch_size * num_heads * num_m_blocks, multiProcessorCount, num_n_blocks, max_splits);
+            params.num_splits = num_splits_heuristic(batch_size * num_heads * num_m_blocks, multiProcessorCount * 2, num_n_blocks, max_splits);
+        }
+        if (flash_debug()) {
+            fprintf(stderr, "[flash_attn_jax] set_params_splitkv: batch=%d num_heads=%d head_size=%d "
+                    "seqlen_q=%d seqlen_k=%d block_n=%d num_n_blocks=%d num_m_blocks=%d "
+                    "sm_count=%d max_splits=%d num_splits=%d\n",
+                    batch_size, num_heads, head_size, max_seqlen_q, max_seqlen_k,
+                    block_n, num_n_blocks, num_m_blocks, multiProcessorCount, max_splits, params.num_splits);
         }
         if (params.num_splits > 1) {
             params.softmax_lseaccum_ptr = lseaccum_ptr;

@@ -23,6 +23,8 @@ ffi::Error set_params_fprop(flash::Flash_fwd_params &params, ffi::DataType eleme
                             int window_size_left, int window_size_right,
                             bool seqlenq_ngroups_swapped = false);
 
+bool flash_debug();
+
 ffi::Error set_params_splitkv(flash::Flash_fwd_params &params,
                               const int batch_size, const int num_heads, const int head_size,
                               const int max_seqlen_k, const int max_seqlen_q,

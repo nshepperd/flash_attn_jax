@@ -140,6 +140,15 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
 
     params.alibi_slopes_ptr = nullptr;
 
+    if (flash_debug()) {
+        fprintf(stderr, "[flash_attn_jax] mha_fwd: batch=%d seqlen_q=%d seqlen_k=%d num_heads=%d num_heads_k=%d "
+                "head_size=%d head_size_rounded=%d seqlen_q_rounded=%d seqlen_k_rounded=%d "
+                "num_splits=%d is_causal=%d sm_count=%d\n",
+                batch_size, seqlen_q, seqlen_k, num_heads, num_heads_k,
+                head_size, head_size_rounded, seqlen_q_rounded, seqlen_k_rounded,
+                params.num_splits, params.is_causal, sm_count);
+    }
+
     if (seqlen_k > 0) {
 		run_mha_fwd(params, stream);
 		// FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
