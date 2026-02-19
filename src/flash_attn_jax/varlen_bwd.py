@@ -16,7 +16,7 @@ from einops import rearrange
 import einops
 import math
 
-from flash_attn_jax.util import round_multiple
+from flash_attn_jax.util import round_multiple, get_sm_count
 
 # ==== Register primitives ====
 
@@ -102,7 +102,7 @@ def _flash_mha_varlen_bwd_hlo_lowering(dout, q, k, v, o, lse, seqlens_q, seqlens
     softmax_d_shape = (b, h, seqlen_q_rounded)
     
     # Calculate nsplits for deterministic mode (varlen-specific)
-    sm_count = 114  # H100, should ideally get this from device query
+    sm_count = get_sm_count()
     if False: # deterministic mode
         nsplits = max(1, (sm_count + b * h - 1) // (b * h))
         dq_accum_shape = (nsplits, totalq + 128 * b, h, d_rounded)  # varlen-specific sizing with splits

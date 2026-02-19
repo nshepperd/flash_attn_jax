@@ -16,7 +16,7 @@ from einops import rearrange
 import einops
 import math
 
-from flash_attn_jax.util import num_splits_heuristic, round_multiple
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, get_sm_count
 
 # ==== Register primitives ====
 
@@ -78,8 +78,8 @@ def _flash_mha_varlen_fwd_hlo_lowering(q,k,v, seqlens_q, seqlens_k, seqused_k=No
         block_n = 64
     num_n_blocks = max(1, (max_seqlen_k + block_n - 1) // block_n)
     num_m_blocks = max(1, (max_seqlen_q + 64 - 1) // 64)
-    sm_count = 114 # H100
-    num_splits = num_splits_heuristic(b * h * num_m_blocks, sm_count, num_n_blocks, 128)
+    sm_count = get_sm_count()
+    num_splits = num_splits_heuristic(b * h * num_m_blocks, sm_count * 2, num_n_blocks, 128)
     lseaccum_shape = (num_splits, b, h, max_seqlen_q)
     oaccum_shape = (num_splits, b, max_seqlen_q, h, round_multiple(d, 32))
 

@@ -1,3 +1,4 @@
+import os
 import math
 import re
 from functools import partial, wraps
@@ -25,7 +26,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from flash_attn_jax.ring_attention import ring_fwd
-from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping, get_sm_count
 
 # ==== Register primitives ====
 
@@ -84,8 +85,8 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: 
         block_n = 64
     num_n_blocks = max(1, (lk + block_n - 1) // block_n)
     num_m_blocks = max(1, (lq + 64 - 1) // 64)
-    sm_count = 114 # H100
-    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
+    sm_count = get_sm_count()
+    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count * 2, num_n_blocks, 128)
     lseaccum_shape = (num_splits, n, hq, lq)
     oaccum_shape = (num_splits, n, lq, hq, round_multiple(d, 32))
 

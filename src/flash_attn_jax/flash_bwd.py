@@ -25,7 +25,7 @@ from einops import rearrange
 import einops
 import math
 
-from flash_attn_jax.util import round_multiple, array_mapping
+from flash_attn_jax.util import round_multiple, array_mapping, get_sm_count
 
 # ==== Register primitives ====
 
@@ -74,7 +74,7 @@ def _flash_mha_bwd_lowering(dout, q, k, v, out, lse, *, softmax_scale: Optional[
     softmax_d_shape = (n, hq, lq_rounded)
     
     # Calculate nsplits for deterministic mode
-    sm_count = 114  # H100, should ideally get this from device query
+    sm_count = get_sm_count()
     if False: # deterministic mode
         nsplits = max(1, (sm_count + n * hq - 1) // (n * hq))
         dq_accum_shape = (nsplits, n, lq_rounded, hq, d_rounded)

@@ -1,9 +1,22 @@
+import functools
 import math
 from jax.experimental.custom_partitioning import (
     ArrayMapping,
     CompoundFactor,
 )
 import re
+
+@functools.cache
+def get_sm_count(device_idx: int = 0) -> int:
+    """Query the number of streaming multiprocessors on the given CUDA device."""
+    import ctypes
+    # cudaDevAttrMultiProcessorCount = 16
+    count = ctypes.c_int()
+    libcudart = ctypes.CDLL("libcudart.so")
+    err = libcudart.cudaDeviceGetAttribute(ctypes.byref(count), 16, device_idx)
+    if err != 0:
+        raise RuntimeError(f"cudaDeviceGetAttribute failed with error {err}")
+    return count.value
 
 def ceildiv(a: int, b: int) -> int:
     return (a + b - 1) // b
