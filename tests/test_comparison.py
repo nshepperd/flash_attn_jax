@@ -71,7 +71,6 @@ def test_fwd(n, seqlen, h, d, dtype, is_causal):
        seqlen_q=st.integers(min_value=1, max_value=16384),
        seqlen_k=st.integers(min_value=1, max_value=16384),
        n=st.integers(min_value=1, max_value=2),
-    #    m=st.integers(min_value=1, max_value=2),
        is_causal=st.booleans(),
        dtype=st.sampled_from([jnp.float16, jnp.bfloat16]))
 def test_cross_fwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):
@@ -114,13 +113,13 @@ def test_bwd(n, seqlen, h, d, dtype, is_causal):
           (torch_to_jax(q_pt.grad), torch_to_jax(k_pt.grad), torch_to_jax(v_pt.grad)))
 
 
+@pytest.mark.parametrize("m", [1,2])
 @settings(deadline=None)
 @given(d=st.integers(min_value=1, max_value=128),
        h=st.integers(min_value=1, max_value=8),
        seqlen_q=st.integers(min_value=1, max_value=16384),
        seqlen_k=st.integers(min_value=1, max_value=16384),
        n=st.integers(min_value=1, max_value=2),
-       m=st.integers(min_value=1, max_value=2),
        is_causal=st.booleans(),
        dtype=st.sampled_from([jnp.float16, jnp.bfloat16]))
 def test_cross_bwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):

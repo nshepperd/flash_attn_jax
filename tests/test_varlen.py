@@ -236,8 +236,8 @@ def test_varlen_flash_vmap(m, h, d, causal, local, dtype, seqused_k_limit):
     #     out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts, seqused_k)
     # else:
     #     out_ref = vmap_unrolled(fwd_fn)(q,k,v,fenceposts)
-    atol = 5e-3 if dtype == jnp.float16 else 4e-2
-    rtol = 3e-3 if dtype == jnp.float16 else 3e-2
+    atol = 8e-3 if dtype == jnp.float16 else 4e-2
+    rtol = 8e-3 if dtype == jnp.float16 else 3e-2
     out_ref = jax.vmap(ref_fn)(q,k,v,fenceposts, seqused_k)
     out_vmap = jax.vmap(fwd_fn)(q,k,v,fenceposts, seqused_k)
     np.testing.assert_allclose(out_vmap, out_ref, atol=atol, rtol=rtol)

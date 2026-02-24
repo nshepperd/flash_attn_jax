@@ -1,5 +1,7 @@
 """Test configuration to enter debugging in vscode when tests fail."""
 
+import os
+os.environ['XLA_CLIENT_MEM_FRACTION'] = '0.25'
 import pytest
 import sys
 import threading

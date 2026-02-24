@@ -29,7 +29,7 @@ classifiers = [
 ]
 
 [dependency-groups]
-test = [
+dev = [
     "pytest>=7.0.0",
     "einops",
     "jax[cuda12]==0.8.2",
@@ -38,6 +38,13 @@ test = [
     "pyperf",
     "hypothesis",
 ]
+
+torch = [
+    "torch==2.8.*",
+    "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
+]
+
+
 [project.urls]
 Homepage = "https://github.com/nshepperd/flash_attn_jax"
 
