@@ -1,19 +1,22 @@
 {
-    "python.testing.pytestArgs": [
-        "tests"
-    ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
-    "files.exclude": {
-        "__pycache__": true,
-        ".venv": true,
-        "build": true,
-        ".cache": true,
-        ".pytest_cache": true,
-    },
-    "cmake.configureArgs": [
-        "-DPYTHON_VENV=${workspaceFolder}/.venv",
-        "-DNO_OPTIONS_FILE=1",
-        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-    ]
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "files.exclude": {
+    "__pycache__": true,
+    ".venv": true,
+    "build": true,
+    ".cache": true,
+    ".pytest_cache": true
+  },
+  "cmake.configureArgs": [
+    "-DPYTHON_VENV=${workspaceFolder}/.venv",
+    "-DNO_OPTIONS_FILE=1",
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+  ],
+  "python.terminal.activateEnvironment": false,
+  "terminal.integrated.env.linux": {
+    "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+    "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+  }
 }
