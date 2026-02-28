@@ -53,7 +53,8 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
     bool is_sm8x = major == 8 && minor >= 0;
     bool is_sm90 = major == 9 && minor == 0;
-    FFI_CHECK(is_sm90 || is_sm8x) << ffi::ErrorCode::kUnimplemented << "FlashAttention only supports Ampere GPUs or newer.";
+    bool is_sm1xx = major >= 10;
+    FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << ffi::ErrorCode::kUnimplemented << "FlashAttention only supports Ampere GPUs or newer.";
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
 
@@ -62,7 +63,7 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
         << "query, key and value must have the same dtype";
     FFI_CHECK(dtype == ffi::DataType::F16 || dtype == ffi::DataType::BF16) << ffi::ErrorCode::kInvalidArgument << "FlashAttention only support fp16 and bf16 data type";
     if (dtype == ffi::DataType::BF16) {
-        FFI_CHECK(is_sm90 || is_sm8x) << ffi::ErrorCode::kInvalidArgument << "bfloat16 is only supported on Ampere GPUs or newer";
+        FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << ffi::ErrorCode::kInvalidArgument << "bfloat16 is only supported on Ampere GPUs or newer";
     }
 
     const int batch_size = q.dimensions()[0];
@@ -211,15 +212,16 @@ mha_varlen_fwd_impl(
     // bool is_sm75 = major == 7 && minor == 5;
     bool is_sm8x = major == 8 && minor >= 0;
     bool is_sm90 = major == 9 && minor == 0;
-    FFI_CHECK(is_sm90 || is_sm8x) << "FlashAttention only supports Ampere GPUs or newer.";
+    bool is_sm1xx = major >= 10;
+    FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "FlashAttention only supports Ampere GPUs or newer.";
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
 
     auto q_dtype = q.element_type();
-    FFI_CHECK(q_dtype == ffi::F16 || q_dtype == ffi::BF16) << 
+    FFI_CHECK(q_dtype == ffi::F16 || q_dtype == ffi::BF16) <<
                 "FlashAttention only support fp16 and bf16 data type";
     if (q_dtype == ffi::BF16) {
-        FFI_CHECK(is_sm90 || is_sm8x) << "bfloat16 is only supported on Ampere GPUs or newer";
+        FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "bfloat16 is only supported on Ampere GPUs or newer";
     }
     FFI_CHECK(k.element_type() == q_dtype) << "query and key must have the same dtype";
     FFI_CHECK(v.element_type() == q_dtype) << "query and value must have the same dtype";

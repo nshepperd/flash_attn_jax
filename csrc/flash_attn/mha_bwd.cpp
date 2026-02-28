@@ -134,13 +134,14 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     bool is_sm8x = major == 8 && minor >= 0;
     bool is_sm80 = major == 8 && minor == 0;
     bool is_sm90 = major == 9 && minor == 0;
-    FFI_CHECK(is_sm90 || is_sm8x) << "FlashAttention only supports Ampere GPUs or newer.";
+    bool is_sm1xx = major >= 10;
+    FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "FlashAttention only supports Ampere GPUs or newer.";
 
     auto q_dtype = q.element_type();
     FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16) << ffi::ErrorCode::kInvalidArgument
         << "FlashAttention only support fp16 and bf16 data type";
     if (q_dtype == ffi::BF16) {
-        FFI_CHECK(is_sm90 || is_sm8x) << "bfloat16 is only supported on Ampere GPUs or newer";
+        FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "bfloat16 is only supported on Ampere GPUs or newer";
     }
 
     FFI_CHECK(k.element_type() == q_dtype) << "query and key must have the same dtype";
@@ -161,7 +162,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     FFI_CHECK(head_size % 8 == 0) << "head_size should be a multiple of 8";
     FFI_CHECK(head_size <= 256) << "FlashAttention backward only supports head dimension at most 256";
     if (head_size > 192) {
-        FFI_CHECK(is_sm80 || is_sm90) << "FlashAttention backward for head dim > 192 requires A100/A800 or H100/H800";
+        FFI_CHECK(is_sm80 || is_sm90 || is_sm1xx) << "FlashAttention backward for head dim > 192 requires A100/A800 or H100/H800";
     }
     FFI_CHECK(num_heads % num_heads_k == 0) << "Number of heads in key/value must divide number of heads in query";
 
@@ -274,7 +275,8 @@ mha_varlen_bwd_impl(
     bool is_sm8x = major == 8 && minor >= 0;
     bool is_sm80 = major == 8 && minor == 0;
     bool is_sm90 = major == 9 && minor == 0;
-    FFI_CHECK(is_sm90 || is_sm8x) << "FlashAttention only supports Ampere GPUs or newer.";
+    bool is_sm1xx = major >= 10;
+    FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "FlashAttention only supports Ampere GPUs or newer.";
     // We will support Turing in the near future
     // TORCH_CHECK(is_sm90 || is_sm8x || is_sm75, "FlashAttention only supports Turing GPUs or newer.");
     bool is_dropout = false;
@@ -283,7 +285,7 @@ mha_varlen_bwd_impl(
     FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16) << ffi::ErrorCode::kInvalidArgument
         << "FlashAttention only support fp16 and bf16 data type";
     if (q_dtype == ffi::BF16) {
-        FFI_CHECK(is_sm90 || is_sm8x) << "bfloat16 is only supported on Ampere GPUs or newer";
+        FFI_CHECK(is_sm90 || is_sm8x || is_sm1xx) << "bfloat16 is only supported on Ampere GPUs or newer";
     }
     FFI_CHECK(k.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and key must have the same dtype";
     FFI_CHECK(v.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and value must have the same dtype";
@@ -306,7 +308,7 @@ mha_varlen_bwd_impl(
     FFI_CHECK(head_size % 8 == 0) << "head_size should be a multiple of 8";
     FFI_CHECK(head_size <= 256) << "FlashAttention backward only supports head dimension at most 256";
     if (head_size > 192) {
-        FFI_CHECK(is_sm80 || is_sm90) << "FlashAttention backward for head dim > 192 requires A100/A800 or H100/H800";
+        FFI_CHECK(is_sm80 || is_sm90 || is_sm1xx) << "FlashAttention backward for head dim > 192 requires A100/A800 or H100/H800";
     }
     FFI_CHECK(num_heads % num_heads_k == 0) << "Number of heads in key/value must divide number of heads in query";
 
