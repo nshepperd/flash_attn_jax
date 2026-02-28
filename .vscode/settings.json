@@ -12,7 +12,7 @@
         ".pytest_cache": true,
     },
     "cmake.configureArgs": [
-        "-DPython_ROOT_DIR=${workspaceFolder}/.venv",
+        "-DPYTHON_VENV=${workspaceFolder}/.venv",
         "-DNO_OPTIONS_FILE=1",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
     ]
