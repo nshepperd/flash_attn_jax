@@ -186,8 +186,12 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     
     if (loop) {
         dq_accum_ptr = dq_accum->untyped_data();
-        // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        // The preprocess kernel clears every block of dq_accum the backward accumulates into, unless
+        // the deterministic order's split buffers need the whole buffer zeroed, as flash-attention's
+        // own mha_bwd allocates it with torch::empty or torch::zeros.
+        if (deterministic) {
+            FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        }
     }
 
 
@@ -352,8 +356,13 @@ mha_varlen_bwd_impl(
         // be at least 128 apart. It's ok for us to do atomicAdds up to 128 rows beyond what we're normally
         // allowed to do. So we won't have to do any bound checking, and performance should stay the same.
         dq_accum_ptr = dq_accum->untyped_data();
-        // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        // The preprocess kernel clears every block of dq_accum the backward accumulates into, unless
+        // the deterministic order's split buffers need the whole buffer zeroed, as flash-attention's
+        // own mha_varlen_bwd allocates it with torch::empty or torch::zeros. The padded rows are
+        // num_batch * 128 of them, which zeroing grew with the number of sequences.
+        if (deterministic) {
+            FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        }
         
         // Set split stride for deterministic mode
         if (deterministic) {
